@@ -399,4 +399,4 @@ def handle_message(message: Message):
         user_data.pop(chat_id, None)
 
 
-bot.polling()
+bot.polling(none_stop=True)
