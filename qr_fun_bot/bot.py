@@ -198,7 +198,15 @@ def load_allowed_users():
         pass
 
 # Загружаем разрешённых пользователей при старте
-load_allowed_users()
+
+allowed_users = load_allowed_users()
+allowed_users.add(ADMIN_ID)  # обязательно сохраняем доступ себе
+def load_allowed_users():
+    try:
+        with open("allowed_users.txt", "r") as f:
+            return set(int(line.strip()) for line in f if line.strip().isdigit())
+    except FileNotFoundError:
+        return set()
 
 # Уведомление админу о попытке доступа
 def notify_admin_about_access_request(user):
@@ -296,7 +304,30 @@ def add_guest(message: Message):
     save_allowed_users()
     bot.send_message(message.chat.id, f"✅ Пользователь с ID {guest_id} добавлен как гость.")
 
+@bot.message_handler(commands=['remove_user'])
+def remove_user(message):
+    if message.from_user.id != ADMIN_ID:
+        return
 
+    if not message.reply_to_message or not message.reply_to_message.forward_from:
+        bot.reply_to(message, "Перешли сообщение пользователя, чтобы удалить его.")
+        return
+
+    user_id = message.reply_to_message.forward_from.id
+    if user_id in allowed_users:
+        allowed_users.remove(user_id)
+        guest_users.discard(user_id)
+
+        # Обновляем файл
+        with open("allowed_users.txt", "w") as f:
+            for uid in allowed_users:
+                if uid != ADMIN_ID:
+                    f.write(f"{uid}\n")
+
+        bot.reply_to(message, f"❌ Доступ пользователя {user_id} удалён.")
+    else:
+        bot.reply_to(message, "Этот пользователь и так не имеет доступа.")
+         
 # Команда /start для разрешённых пользователей — выбор типа транспорта
 @bot.message_handler(commands=['start'])
 def start(message: Message):
