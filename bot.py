@@ -1,10 +1,12 @@
+import os
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
 from datetime import datetime
 from ticket_generator import generate_ticket  # ← твоя функция генерации
 
+
 # ВАЖНО: Замените на свой токен, обязательно с двоеточием!
-BOT_TOKEN = "8471418184:AAFHpIxKVHs23W409paFaaImSB_Z35il-vA"
+BOT_TOKEN = os.getenv("BOT_TOKEN") or "8471418184:AAFHpIxKVHs23W409paFaaImSB_Z35il-vA"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # ID главного администратора
@@ -220,7 +222,7 @@ def notify_admin_about_access_request(user):
     deny_button = InlineKeyboardButton(text="❌ Отклонить", callback_data=f"deny_{user_id}")
     keyboard.add(allow_button, deny_button)
 
-    bot.send_message(ADMIN_ID, text, parse_mode="Markdown", reply_markup=keyboard)
+    bot.send_message(ADMIN_ID, text, reply_markup=keyboard, parse_mode="HTML")
 
 
 # Обработчик сообщений от НЕ разрешённых пользователей
@@ -282,19 +284,31 @@ def add_guest(message: Message):
         bot.send_message(message.chat.id, "⛔ У вас нет прав для выполнения этой команды.")
         return
 
-    if not message.reply_to_message:
-        bot.send_message(message.chat.id, "❗ Перешлите сообщение пользователя и ответьте на него командой /add_guest.")
+    args = message.text.split()
+    if len(args) != 2 or not args[1].startswith('@'):
+        bot.send_message(message.chat.id, "❗ Используйте формат команды: /add_guest @username")
         return
 
-    guest_id = message.reply_to_message.forward_from.id if message.reply_to_message.forward_from else None
-    if not guest_id:
-        bot.send_message(message.chat.id, "⚠️ Не удалось получить ID пользователя. Убедитесь, что он не скрывает пересылку сообщений.")
+    username = args[1][1:]  # убираем символ '@'
+
+    # Попробуем найти пользователя по никнейму среди чатов (бот должен иметь с ним контакт)
+    try:
+        # Получим информацию о пользователе (бот должен иметь с ним переписку!)
+        user = bot.get_chat(f"@{username}")
+        guest_id = user.id
+    except Exception as e:
+        bot.send_message(message.chat.id, f"⚠️ Не удалось найти пользователя @{username}. Убедитесь, что бот с ним уже общался.")
+        return
+
+    if guest_id in allowed_users:
+        bot.send_message(message.chat.id, f"ℹ️ Пользователь @{username} уже добавлен.")
         return
 
     allowed_users.add(guest_id)
     guest_users.add(guest_id)
     save_allowed_users()
-    bot.send_message(message.chat.id, f"✅ Пользователь с ID {guest_id} добавлен как гость.")
+    bot.send_message(message.chat.id, f"✅ Пользователь @{username} добавлен как гость.")
+
 
 
 # Команда /start для разрешённых пользователей — выбор типа транспорта
@@ -399,4 +413,31 @@ def handle_message(message: Message):
         user_data.pop(chat_id, None)
 
 
-bot.polling(none_stop=True)
+     # 👇 Вставка Flask-сервера
+     from flask import Flask
+     import threading
+     import os
+     
+     app = Flask(__name__)
+     
+     @app.route('/')
+     def home():
+         return "Бот работает!"
+     
+     @app.route('/ping')
+     def ping():
+         return "Pong!"
+     
+     def run_bot():
+         load_allowed_users()  # если хочешь перезагружать список при старте
+         bot.polling(none_stop=True)
+     
+     def run_web():
+         port = int(os.environ.get("PORT", 8080))
+         app.run(host="0.0.0.0", port=port)
+     
+     if __name__ == "__main__":
+         threading.Thread(target=run_bot).start()  # запуск бота в отдельном потоке
+         run_web()  # запуск Flask (главный поток)
+
+
