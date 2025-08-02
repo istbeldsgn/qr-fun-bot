@@ -186,6 +186,28 @@ routes_trolleybus = {
     "105": ("Завод «Кристалл» — «Горэлектротранспорт»", "«Горэлектротранспорт» — Завод «Кристалл»")
 }
 
+app = Flask(__name__)  # Никаких отступов здесь!
+
+@app.route('/')
+def home():
+    return "Бот работает!"
+
+@app.route('/ping')
+def ping():
+    return "Pong!"
+
+def run_bot():
+    load_allowed_users()  # если нужно
+    bot.polling(none_stop=True)
+
+def run_web():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
+
+if __name__ == "__main__":
+    threading.Thread(target=run_bot).start()
+    run_web()
+
 # Функция сохранения разрешённых пользователей в файл
 def save_allowed_users():
     with open("allowed_users.txt", "w") as f:
@@ -415,24 +437,5 @@ def handle_message(message: Message):
         )
         user_data.pop(chat_id, None)
 
-     app = Flask(__name__)
-     
-     @app.route('/')
-     def home():
-         return "Бот работает!"
-     
-     @app.route('/ping')
-     def ping():
-         return "Pong!"
-     
-     def run_bot():
-         load_allowed_users()  # если нужно
-         bot.polling(none_stop=True)
-     
-     def run_web():
-         port = int(os.environ.get("PORT", 8080))
-         app.run(host="0.0.0.0", port=port)
-     
-     if __name__ == "__main__":
-         threading.Thread(target=run_bot).start()
-         run_web()
+
+
