@@ -186,6 +186,22 @@ routes_trolleybus = {
     "105": ("Завод «Кристалл» — «Горэлектротранспорт»", "«Горэлектротранспорт» — Завод «Кристалл»")
 }
 
+# Функция сохранения разрешённых пользователей в файл
+def save_allowed_users():
+    with open("allowed_users.txt", "w") as f:
+        for user_id in allowed_users:
+            f.write(str(user_id) + "\n")
+
+# Функция загрузки разрешённых пользователей из файла
+def load_allowed_users():
+    try:
+        with open("allowed_users.txt", "r") as f:
+            for line in f:
+                user_id = int(line.strip())
+                allowed_users.add(user_id)
+    except FileNotFoundError:
+        pass
+
 app = Flask(__name__)  # Никаких отступов здесь!
 
 @app.route('/')
@@ -207,22 +223,6 @@ def run_web():
 if __name__ == "__main__":
     threading.Thread(target=run_bot).start()
     run_web()
-
-# Функция сохранения разрешённых пользователей в файл
-def save_allowed_users():
-    with open("allowed_users.txt", "w") as f:
-        for user_id in allowed_users:
-            f.write(str(user_id) + "\n")
-
-# Функция загрузки разрешённых пользователей из файла
-def load_allowed_users():
-    try:
-        with open("allowed_users.txt", "r") as f:
-            for line in f:
-                user_id = int(line.strip())
-                allowed_users.add(user_id)
-    except FileNotFoundError:
-        pass
 
 # Загружаем разрешённых пользователей при старте
 load_allowed_users()
@@ -436,6 +436,7 @@ def handle_message(message: Message):
             "📌 Или нажмите /start, чтобы снова выбрать тип транспорта"
         )
         user_data.pop(chat_id, None)
+
 
 
 
