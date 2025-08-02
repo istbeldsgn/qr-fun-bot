@@ -422,23 +422,23 @@ def handle_message(message: Message):
      
      @app.route('/')
      def home():
-         return "Бот работает!"
+        return "Бот работает!"
      
      @app.route('/ping')
      def ping():
-         return "Pong!"
+        return "Pong!"
      
      def run_bot():
-         load_allowed_users()  # если хочешь перезагружать список при старте
-         bot.polling(none_stop=True)
+        load_allowed_users()  # если хочешь перезагружать список при старте
+        bot.polling(none_stop=True)
      
      def run_web():
-         port = int(os.environ.get("PORT", 8080))
-         app.run(host="0.0.0.0", port=port)
+        port = int(os.environ.get("PORT", 8080))
+        app.run(host="0.0.0.0", port=port)
      
      if __name__ == "__main__":
-         threading.Thread(target=run_bot).start()  # запуск бота в отдельном потоке
-         run_web()  # запуск Flask (главный поток)
+        threading.Thread(target=run_bot).start()  # запуск бота в отдельном потоке
+        run_web()  # запуск Flask (главный поток)
 
 
 
