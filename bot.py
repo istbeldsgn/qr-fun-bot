@@ -1,8 +1,11 @@
-import os
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
 from datetime import datetime
 from ticket_generator import generate_ticket  # ← твоя функция генерации
+
+from flask import Flask
+import threading
+import os
 
 
 # ВАЖНО: Замените на свой токен, обязательно с двоеточием!
@@ -414,9 +417,6 @@ def handle_message(message: Message):
 
 
      # 👇 Вставка Flask-сервера
-     from flask import Flask
-     import threading
-     import os
      
      app = Flask(__name__)
      
@@ -439,5 +439,6 @@ def handle_message(message: Message):
      if __name__ == "__main__":
          threading.Thread(target=run_bot).start()  # запуск бота в отдельном потоке
          run_web()  # запуск Flask (главный поток)
+
 
 
