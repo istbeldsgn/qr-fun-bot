@@ -398,6 +398,8 @@ def handle_message(message: Message):
         )
         user_data.pop(chat_id, None)
 
+bot.remove_webhook()
 
-bot.polling()
+bot.polling(none_stop=True)
+
 
