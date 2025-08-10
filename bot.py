@@ -3,8 +3,19 @@ import sys
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message, Update
 from flask import Flask, request  # для вебхука (если дальше подключаешь)
+
+from db_store import _conn
+try:
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute("select 1;")
+    print("✅ DB OK: подключение установлено")
+except Exception as e:
+    print(f"❌ DB FAIL: {e}")
+    sys.exit(1)
+
 from db_store import init_db, ensure_admin, load_allowed_and_guest, add_or_update_user, remove_user
 from ticket_generator import generate_ticket  # ← твоя функция генерации
+
 
 # --- Читаем переменные окружения с понятными ошибками ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -444,5 +455,6 @@ if __name__ == "__main__":
     bot.set_webhook(url=WEBHOOK_URL, allowed_updates=["message", "callback_query"])
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
 
 
