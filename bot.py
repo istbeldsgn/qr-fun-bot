@@ -295,7 +295,7 @@ def handle_message(message: Message):
 
     # 2) Номер маршрута
     elif 'route_num' not in data:
-        data['route_num'] = (message.text or "").strip().lower().replace('a', 'а')  # лат. a → кир. а
+        data['route_num'] = (message.text or "").strip().lower().replace('a', 'а')
         route_num = data['route_num']
 
         route_base = routes_bus if data['transport_type'] == 'bus' else routes_trolleybus
@@ -398,46 +398,7 @@ def handle_message(message: Message):
             "📌 Или нажмите /start, чтобы снова выбрать тип транспорта"
         )
         user_data.pop(uid, None)
-
-
-
-
-        except Exception as e:
-            # фолбэк: хотя бы картинку
-            try:
-                ticket_path = generate_ticket(
-                    transport_label,
-                    data['route_num'],
-                    data['route'],
-                    data['garage_number']
-                )
-                with open(ticket_path, 'rb') as f:
-                    print("STEP: sending photo fallback", flush=True)
-                    safe_send(bot.send_photo, message.chat.id, f, caption="Ваш билет 🎟️ (видео временно недоступно)")
-            except Exception as e2:
-                bot.send_message(message.chat.id, f"Ошибка при генерации билета: {e2}")
-
-        finally:
-            # очистка временных файлов
-            for p in (img_path, video_path, ticket_path):
-                if p:
-                    try: os.remove(p)
-                    except Exception: pass
-
-            user_data.pop(uid, None)
-
-    # 5) Защитный fallback
-    else:
-        bot.send_message(
-            message.chat.id,
-            safe_send(bot.send_message, message.chat.id, "❗ Неожиданное сообщение…")
-            "🔄 Ввести любой символ, чтобы начать заново\n"
-            "📌 Или нажмите /start, чтобы снова выбрать тип транспорта"
-        )
-        user_data.pop(uid, None)
-
-
-        
+  
 #заменил polling , делаю вебхук 
 # --- Вебхук (Flask) ---
 from flask import Flask, request
@@ -484,3 +445,4 @@ if __name__ == "__main__":
     # при локальном запуске/polling-free — поднимем встроенный сервер Flask
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
