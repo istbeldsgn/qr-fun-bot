@@ -3,3 +3,4 @@ pillow
 pytz
 psycopg2-binary
 flask
+gunicorn
