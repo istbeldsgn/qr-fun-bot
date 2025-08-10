@@ -1,22 +1,43 @@
+import os
+import sys
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
-from datetime import datetime
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message, Update
+from flask import Flask, request  # для вебхука (если дальше подключаешь)
+from db_store import init_db, ensure_admin, load_allowed_and_guest, add_or_update_user, remove_user
 from ticket_generator import generate_ticket  # ← твоя функция генерации
 
-# ВАЖНО: Замените на свой токен, обязательно с двоеточием!
-BOT_TOKEN = "8471418184:AAFHpIxKVHs23W409paFaaImSB_Z35il-vA"
-bot = telebot.TeleBot(BOT_TOKEN)
+# --- Читаем переменные окружения с понятными ошибками ---
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+ADMIN_ID_RAW = os.environ.get("ADMIN_ID")
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # пригодится далее для вебхука
 
-# ID главного администратора
-ADMIN_ID = 1118621079
+missing = []
+if not BOT_TOKEN:
+    missing.append("BOT_TOKEN")
+if not ADMIN_ID_RAW:
+    missing.append("ADMIN_ID")
+# если прямо сейчас делаешь вебхук, то WEBHOOK_URL обязателен:
+if not WEBHOOK_URL:
+    missing.append("WEBHOOK_URL")
 
-# Множество разрешённых пользователей, изначально только админ
-allowed_users = {ADMIN_ID}
+if missing:
+    sys.exit(f"❌ Не заданы переменные окружения: {', '.join(missing)}")
 
-# Множество гостей (дополнительные разрешённые)
-guest_users = set()
+try:
+    ADMIN_ID = int(ADMIN_ID_RAW)
+except ValueError:
+    sys.exit("❌ ADMIN_ID должен быть целым числом")
 
-# Данные пользователей для промежуточных состояний
+# --- Инициализируем БД и подгружаем списки из БД ---
+init_db()
+ensure_admin(ADMIN_ID)  # гарантируем, что админ есть в таблице
+allowed_users, guest_users = load_allowed_and_guest()
+allowed_users.add(ADMIN_ID)  # на всякий случай держим админа в памяти
+
+# --- Создаём бота ---
+bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
+
+# --- Память для состояний диалога (ключ — user_id, а не chat_id) ---
 user_data = {}
 
 # Базы маршрутов (пример, ты вставишь реальные данные)
@@ -181,39 +202,25 @@ routes_trolleybus = {
     "105": ("Завод «Кристалл» — «Горэлектротранспорт»", "«Горэлектротранспорт» — Завод «Кристалл»")
 }
 
-# Функция сохранения разрешённых пользователей в файл
-def save_allowed_users():
-    with open("allowed_users.txt", "w") as f:
-        for user_id in allowed_users:
-            f.write(str(user_id) + "\n")
 
-# Функция загрузки разрешённых пользователей из файла
-def load_allowed_users():
-    try:
-        with open("allowed_users.txt", "r") as f:
-            for line in f:
-                user_id = int(line.strip())
-                allowed_users.add(user_id)
-    except FileNotFoundError:
-        pass
 
-# Загружаем разрешённых пользователей при старте
-load_allowed_users()
+from html import escape
 
-# Уведомление админу о попытке доступа
 def notify_admin_about_access_request(user):
     user_id = user.id
-    username = user.username or "нет username"
-    first_name = user.first_name or ""
-    last_name = user.last_name or ""
+    username = escape(user.username) if user.username else "нет username"
+    first_name = escape(user.first_name) if user.first_name else ""
+    last_name = escape(user.last_name) if user.last_name else ""
     full_name = f"{first_name} {last_name}".strip()
 
-    text = (f"👤 Пользователь пытается получить доступ к боту:\n"
-            f"Имя: {full_name}\n"
-            f"Username: @{username}\n"
-            f"ID: {user_id}\n"
-            f"[Профиль](tg://user?id={user_id})\n\n"
-            "Предоставить доступ?")
+    text = (
+        f"👤 Пользователь пытается получить доступ к боту:\n"
+        f"Имя: {full_name}\n"
+        f"Username: @{username}\n"
+        f"ID: {user_id}\n"
+        f'<a href="tg://user?id={user_id}">Профиль</a>\n\n'
+        "Предоставить доступ?"
+    )
 
     keyboard = InlineKeyboardMarkup(row_width=2)
     allow_button = InlineKeyboardButton(text="✅ Разрешить", callback_data=f"allow_{user_id}")
@@ -223,20 +230,21 @@ def notify_admin_about_access_request(user):
     bot.send_message(ADMIN_ID, text, reply_markup=keyboard, parse_mode="HTML")
 
 
-# Обработчик сообщений от НЕ разрешённых пользователей
-@bot.message_handler(func=lambda m: m.chat.id not in allowed_users)
+# Обработчик сообщений от НЕ разрешённых пользователей (только личные чаты)
+@bot.message_handler(func=lambda m: getattr(m.chat, "type", "") == "private" and m.from_user.id not in allowed_users)
 def handle_unauthorized(message: Message):
-    chat_id = message.chat.id
     user = message.from_user
-    bot.send_message(chat_id, "⛔ Доступ запрещён. Ожидайте подтверждения от администратора.")
+    bot.send_message(message.chat.id, "⛔ Доступ запрещён. Ожидайте подтверждения от администратора.")
     notify_admin_about_access_request(user)
-
-
-# Обработка нажатий на кнопки "Разрешить" и "Отклонить"
+     
+# Блокируем группы, чтобы бот работал только в личке
+@bot.message_handler(func=lambda m: getattr(m.chat, "type", "") != "private")
+def block_groups(message: Message):
+    bot.reply_to(message, "Бот работает только в личных сообщениях. Напишите мне в личку.")
+     
 @bot.callback_query_handler(func=lambda call: call.data.startswith(("allow_", "deny_")))
 def callback_access_control(call: CallbackQuery):
-    user_id_str = call.data.split("_")[1]
-    user_id = int(user_id_str)
+    user_id = int(call.data.split("_")[1])
 
     if call.from_user.id != ADMIN_ID:
         bot.answer_callback_query(call.id, "У вас нет прав для этого действия.")
@@ -245,7 +253,11 @@ def callback_access_control(call: CallbackQuery):
     if call.data.startswith("allow_"):
         if user_id not in allowed_users:
             allowed_users.add(user_id)
-            save_allowed_users()
+        # если используешь БД (Supabase)
+        try:
+            add_or_update_user(user_id, role="guest")  # или "user"
+        except Exception:
+            pass
 
         bot.answer_callback_query(call.id, "Доступ предоставлен")
         bot.edit_message_text(
@@ -254,13 +266,19 @@ def callback_access_control(call: CallbackQuery):
             text=f"✅ Доступ для пользователя [id={user_id}](tg://user?id={user_id}) предоставлен.",
             parse_mode="Markdown"
         )
-
         try:
             bot.send_message(user_id, "✅ Вам предоставлен доступ к боту. Можете пользоваться.")
         except Exception:
             pass
 
-    elif call.data.startswith("deny_"):
+    else:  # deny_
+        if user_id in allowed_users:
+            allowed_users.discard(user_id)
+        try:
+            remove_user(user_id)
+        except Exception:
+            pass
+
         bot.answer_callback_query(call.id, "Доступ отклонён")
         bot.edit_message_text(
             chat_id=call.message.chat.id,
@@ -268,14 +286,12 @@ def callback_access_control(call: CallbackQuery):
             text=f"❌ Доступ для пользователя [id={user_id}](tg://user?id={user_id}) отклонён.",
             parse_mode="Markdown"
         )
-
         try:
             bot.send_message(user_id, "❌ К сожалению, доступ к боту вам не предоставлен.")
         except Exception:
             pass
 
 
-# Команда для админа добавить гостя вручную (если нужно)
 @bot.message_handler(commands=['add_guest'])
 def add_guest(message: Message):
     if message.from_user.id != ADMIN_ID:
@@ -286,41 +302,49 @@ def add_guest(message: Message):
         bot.send_message(message.chat.id, "❗ Перешлите сообщение пользователя и ответьте на него командой /add_guest.")
         return
 
-    guest_id = message.reply_to_message.forward_from.id if message.reply_to_message.forward_from else None
+    fwd = message.reply_to_message.forward_from
+    guest_id = fwd.id if fwd else None
     if not guest_id:
         bot.send_message(message.chat.id, "⚠️ Не удалось получить ID пользователя. Убедитесь, что он не скрывает пересылку сообщений.")
         return
 
     allowed_users.add(guest_id)
     guest_users.add(guest_id)
-    save_allowed_users()
+    try:
+        add_or_update_user(guest_id, role="guest")
+    except Exception:
+        pass
+
     bot.send_message(message.chat.id, f"✅ Пользователь с ID {guest_id} добавлен как гость.")
+
+
 
 
 # Команда /start для разрешённых пользователей — выбор типа транспорта
 @bot.message_handler(commands=['start'])
 def start(message: Message):
-    chat_id = message.chat.id
-    if chat_id not in allowed_users:
-        bot.send_message(chat_id, "⛔ Доступ запрещён. Обратитесь к администратору.")
+    uid = message.from_user.id
+    if uid not in allowed_users:
+        bot.send_message(message.chat.id, "⛔ Доступ запрещён. Обратитесь к администратору.")
         return
 
-    bot.send_message(chat_id, "Выберите тип транспорта:\n1. Автобус\n2. Троллейбус")
-    user_data[chat_id] = {}
+    bot.send_message(message.chat.id, "Выберите тип транспорта:\n1. Автобус\n2. Троллейбус")
+    user_data[uid] = {}
+
 
 # Обработка текста от разрешённых пользователей для диалога
 @bot.message_handler(func=lambda m: True)
 def handle_message(message: Message):
-    chat_id = message.chat.id
+    uid = message.from_user.id
 
-    if chat_id not in allowed_users:
-        bot.send_message(chat_id, "⛔ Доступ запрещён. Обратитесь к администратору.")
+    if uid not in allowed_users:
+        bot.send_message(message.chat.id, "⛔ Доступ запрещён. Обратитесь к администратору.")
         return
 
-    if chat_id not in user_data:
-        user_data[chat_id] = {}
+    if uid not in user_data:
+        user_data[uid] = {}
 
-    data = user_data[chat_id]
+    data = user_data[uid]
 
     if 'transport_type' not in data:
         text = message.text.strip().lower()
@@ -387,7 +411,7 @@ def handle_message(message: Message):
             bot.send_message(chat_id, f"Ошибка при генерации билета: {e}")
 
         # очистка
-        user_data.pop(chat_id, None)
+        user_data.pop(uid, None)
 
     else:
         bot.send_message(
@@ -398,8 +422,27 @@ def handle_message(message: Message):
         )
         user_data.pop(chat_id, None)
 
-bot.remove_webhook()
+#заменил polling , делаю вебхук 
+# --- Вебхук (Flask) ---
+from flask import Flask, request
+from telebot.types import Update
 
-bot.polling(none_stop=True)
+app = Flask(__name__)
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    upd = Update.de_json(request.get_data().decode("utf-8"))
+    bot.process_new_updates([upd])
+    return "OK", 200
+
+@app.route("/healthz", methods=["GET"])
+def health():
+    return "ok", 200
+
+if __name__ == "__main__":
+    bot.remove_webhook()
+    bot.set_webhook(url=WEBHOOK_URL, allowed_updates=["message", "callback_query"])
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
 
 
