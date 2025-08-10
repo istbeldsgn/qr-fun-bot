@@ -1,14 +1,10 @@
 # ticket_generator.py
-import os
-import uuid
-import tempfile
+import os, uuid, tempfile
 from datetime import datetime
-
 from PIL import Image, ImageDraw, ImageFont
 import pytz
-
-# если хотите — перенесите импорт наверх; внутри функции тоже ок
 from video_overlay import make_video_with_overlay
+
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -67,21 +63,17 @@ def generate_ticket(transport, number, route, garage_number):
     return out_img
 
 def generate_ticket_video(transport, number, route, garage_number, base_video="anim.mp4", crop_top_px=200):
-    """
-    Делает картинку, затем собирает видео с оверлеем (обрезка сверху crop_top_px).
-    Возвращает путь к готовому mp4.
-    """
     img_path = generate_ticket(transport, number, route, garage_number)
 
-    # база-анимация лежит рядом с кодом, в корне проекта
-    base_video_path = os.path.join(BASE_DIR, base_video)
-    out_video = _tmp_path("mp4")
+    base_video_path = os.path.join(BASE_DIR, base_video)  # anim.mp4 лежит в корне рядом с кодом
+    if not os.path.exists(base_video_path):
+        raise FileNotFoundError(f"Не найден файл анимации {base_video_path}. Положи anim.mp4 рядом с кодом.")
 
     out_video = make_video_with_overlay(
         base_video_path=base_video_path,
         overlay_image_path=img_path,
-        output_path=out_video,
+        output_path=None,       # /tmp + уникальное имя
         crop_top_px=crop_top_px,
-        keep_ratio=False  # у вас макеты одинакового размера с видео
+        keep_ratio=False
     )
-    return img_path, out_video  # удобно сразу вернуть и картинку, и видео
+    return img_path, out_video
