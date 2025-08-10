@@ -242,7 +242,7 @@ def add_guest(message: Message):
 def start(message: Message):
     uid = message.from_user.id
     if not is_allowed(uid):
-        bot.send_message(message.chat.id, "⛔ Доступ запрещён. Обратитесь к администратору.")
+        safe_send(bot.send_message, message.chat.id, "⛔ Доступ запрещён. Обратитесь к администратору.")
         return
 
     bot.send_message(message.chat.id, "Выберите тип транспорта:\n1. Автобус\n2. Троллейбус")
@@ -275,35 +275,39 @@ def handle_message(message: Message):
         text = (message.text or "").strip().lower()
         if text in ('1', 'автобус'):
             data['transport_type'] = 'bus'
-            bot.send_message(message.chat.id, "Введите номер маршрута (например, 12):")
+            print("STEP: transport_type=bus", flush=True)
+            safe_send(bot.send_message, message.chat.id, "Введите номер маршрута (например, 12):")
         elif text in ('2', 'троллейбус'):
             data['transport_type'] = 'trolleybus'
-            bot.send_message(message.chat.id, "Введите номер маршрута (например, 2):")
+            print("STEP: transport_type=trolleybus", flush=True)
+            safe_send(bot.send_message, message.chat.id, "Введите номер маршрута (например, 2):")
         else:
-            bot.send_message(
+            print("STEP: ask transport_type again", flush=True)
+            safe_send(
+                bot.send_message,
                 message.chat.id,
-                "Введите тип транспорта:\n"
-                "1. Автобус\n"
-                "2. Троллейбус\n"
-                "(можно ввести цифру или слово)"
+                "Введите тип транспорта:\n1. Автобус\n2. Троллейбус\n(можно ввести цифру или слово)"
             )
 
     # 2) Номер маршрута
     elif 'route_num' not in data:
-        data['route_num'] = (message.text or "").strip().lower().replace('a', 'а')  # лат. a → кир. а
+        data['route_num'] = (message.text or "").strip().lower().replace('a', 'а')
         route_num = data['route_num']
-
         route_base = routes_bus if data['transport_type'] == 'bus' else routes_trolleybus
+    
         if route_num in route_base:
             data['directions'] = route_base[route_num]
-            bot.send_message(
-                message.chat.id,
+            print(f"STEP: route_num={route_num} found, ask direction", flush=True)
+            safe_send(
+                bot.send_message, message.chat.id,
                 f"Выберите направление:\n1. {data['directions'][0]}\n2. {data['directions'][1]}"
             )
         else:
             data['route_manual'] = True
             data['route'] = route_num
-            bot.send_message(message.chat.id, "Маршрут не найден, введите гаражный номер:")
+            print(f"STEP: route_num={route_num} not found, ask garage", flush=True)
+            safe_send(bot.send_message, message.chat.id, "Маршрут не найден, введите гаражный номер:")
+
 
     # 3) Направление (если маршрут найден)
     elif 'route' not in data and not data.get('route_manual', False):
@@ -337,14 +341,17 @@ def handle_message(message: Message):
             )
 
             # отправляем альбом: фото + видео
-            with open(img_path, 'rb') as f_photo, open(video_path, 'rb') as f_video:
-                media = [
-                    InputMediaPhoto(f_photo, caption="Ваш билет 🎟️"),
-                    InputMediaVideo(f_video),
-                ]
-                bot.send_media_group(message.chat.id, media)
+        with open(img_path, 'rb') as f_photo, open(video_path, 'rb') as f_video:
+            media = [
+                InputMediaPhoto(f_photo, caption="Ваш билет 🎟️"),
+                InputMediaVideo(f_video),
+            ]
+            print("STEP: sending media_group", flush=True)
+            safe_send(bot.send_media_group, message.chat.id, media)
+        
+        safe_send(bot.send_message, message.chat.id, "✅ Билет сгенерирован! Введите любой символ для нового билета.")
 
-            bot.send_message(message.chat.id, "✅ Билет сгенерирован! Введите любой символ для нового билета.")
+
 
         except Exception as e:
             # фолбэк: хотя бы картинку
@@ -356,7 +363,8 @@ def handle_message(message: Message):
                     data['garage_number']
                 )
                 with open(ticket_path, 'rb') as f:
-                    bot.send_photo(message.chat.id, f, caption="Ваш билет 🎟️ (видео временно недоступно)")
+                    print("STEP: sending photo fallback", flush=True)
+                    safe_send(bot.send_photo, message.chat.id, f, caption="Ваш билет 🎟️ (видео временно недоступно)")
             except Exception as e2:
                 bot.send_message(message.chat.id, f"Ошибка при генерации билета: {e2}")
 
@@ -373,7 +381,7 @@ def handle_message(message: Message):
     else:
         bot.send_message(
             message.chat.id,
-            "❗ Неожиданное сообщение. Вы можете:\n"
+            safe_send(bot.send_message, message.chat.id, "❗ Неожиданное сообщение…")
             "🔄 Ввести любой символ, чтобы начать заново\n"
             "📌 Или нажмите /start, чтобы снова выбрать тип транспорта"
         )
@@ -427,21 +435,3 @@ if __name__ == "__main__":
     # при локальном запуске/polling-free — поднимем встроенный сервер Flask
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
