@@ -6,8 +6,12 @@ print("DB_USER:", os.environ.get("DB_USER"))
 import os
 import sys
 import telebot
+
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message, Update
 from flask import Flask, request  # для вебхука (если дальше подключаешь)
+
+import logging
+telebot.logger.setLevel(logging.INFO)
 
 from db_store import _conn
 try:
@@ -268,8 +272,8 @@ def notify_admin_about_access_request(user):
 
 
 # Обработчик сообщений от НЕ разрешённых пользователей (только личные чаты)
-@bot.message_handler(func=lambda m: getattr(m.chat, "type", "") == "private" and m.from_user.id not in allowed_users)
-def handle_unauthorized(message: Message):
+@bot.message_handler(func=lambda m: getattr(m.chat, "type", "") == "private" and not is_allowed(m.from_user.id))
+def handle_unauthorized(message):
     user = message.from_user
     bot.send_message(message.chat.id, "⛔ Доступ запрещён. Ожидайте подтверждения от администратора.")
     notify_admin_about_access_request(user)
@@ -373,6 +377,7 @@ def start(message: Message):
 @bot.message_handler(func=lambda m: True)
 def handle_message(message: Message):
     uid = message.from_user.id
+    print(f"💬 msg from {uid} allowed={is_allowed(uid)} text={message.text!r}", flush=True)
 
     if uid not in allowed_users:
         bot.send_message(message.chat.id, "⛔ Доступ запрещён. Обратитесь к администратору.")
@@ -477,8 +482,13 @@ def health():
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    upd = Update.de_json(request.get_data().decode("utf-8"))
-    bot.process_new_updates([upd])
+    raw = request.get_data().decode("utf-8")
+    print("⬇️ update:", raw, flush=True)   # видно любой апдейт
+    try:
+        upd = Update.de_json(raw)
+        bot.process_new_updates([upd])
+    except Exception as e:
+        print("🔥 webhook handler error:", repr(e), flush=True)
     return "OK", 200
 
 def configure_webhook():
@@ -500,6 +510,7 @@ if __name__ == "__main__":
     # при локальном запуске/polling-free — поднимем встроенный сервер Flask
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
