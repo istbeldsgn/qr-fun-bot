@@ -440,21 +440,42 @@ from telebot.types import Update
 
 app = Flask(__name__)
 
+@app.route("/", methods=["GET"])
+def index():
+    # чтобы Render не видел 404 на корне
+    return "ok", 200
+
+@app.route("/healthz", methods=["GET"])
+def health():
+    return "ok", 200
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     upd = Update.de_json(request.get_data().decode("utf-8"))
     bot.process_new_updates([upd])
     return "OK", 200
 
-@app.route("/healthz", methods=["GET"])
-def health():
-    return "ok", 200
-
-if __name__ == "__main__":
+def configure_webhook():
+    # ставим вебхук и при gunicorn, и при python
     bot.remove_webhook()
     bot.set_webhook(url=WEBHOOK_URL, allowed_updates=["message", "callback_query"])
+    # необязательно, но полезно: проверка, что токен рабочий
+    try:
+        me = bot.get_me()
+        print(f"✅ Telegram OK: @{me.username} (id {me.id})")
+    except Exception as e:
+        print(f"❌ Telegram auth failed: {e}")
+        sys.exit(1)
+
+# вызываем сразу при импорте модуля (важно для gunicorn)
+configure_webhook()
+
+if __name__ == "__main__":
+    # при локальном запуске/polling-free — поднимем встроенный сервер Flask
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
+
 
 
 
