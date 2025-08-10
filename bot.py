@@ -265,13 +265,9 @@ def start(message: Message):
 def handle_message(message: Message):
     uid = message.from_user.id
     print(f"💬 msg from {uid} allowed={is_allowed(uid)} text={message.text!r}", flush=True)
-    
-    if not allow_message(uid):
-        bot.send_message(message.chat.id, "Слишком много сообщений. Подождите пару секунд 🙏")
-        return
-        
+
     if not is_allowed(uid):
-        bot.send_message(message.chat.id, "⛔ Доступ запрещён. Обратитесь к администратору.")
+        safe_send(bot.send_message, message.chat.id, "⛔ Доступ запрещён. Обратитесь к администратору.")
         return
 
     if uid not in user_data:
@@ -299,10 +295,10 @@ def handle_message(message: Message):
 
     # 2) Номер маршрута
     elif 'route_num' not in data:
-        data['route_num'] = (message.text or "").strip().lower().replace('a', 'а')
+        data['route_num'] = (message.text or "").strip().lower().replace('a', 'а')  # лат. a → кир. а
         route_num = data['route_num']
+
         route_base = routes_bus if data['transport_type'] == 'bus' else routes_trolleybus
-    
         if route_num in route_base:
             data['directions'] = route_base[route_num]
             print(f"STEP: route_num={route_num} found, ask direction", flush=True)
@@ -316,75 +312,93 @@ def handle_message(message: Message):
             print(f"STEP: route_num={route_num} not found, ask garage", flush=True)
             safe_send(bot.send_message, message.chat.id, "Маршрут не найден, введите гаражный номер:")
 
-
     # 3) Направление (если маршрут найден)
     elif 'route' not in data and not data.get('route_manual', False):
         choice = (message.text or "").strip()
         if choice == '1':
             data['route'] = data['directions'][0]
-            bot.send_message(message.chat.id, "Введите гаражный номер:")
+            safe_send(bot.send_message, message.chat.id, "Введите гаражный номер:")
         elif choice == '2':
             data['route'] = data['directions'][1]
-            bot.send_message(message.chat.id, "Введите гаражный номер:")
+            safe_send(bot.send_message, message.chat.id, "Введите гаражный номер:")
         else:
-            bot.send_message(message.chat.id, "Некорректный ввод. Введите 1 или 2:")
+            safe_send(bot.send_message, message.chat.id, "Некорректный ввод. Введите 1 или 2:")
 
+    # 4) Гаражный номер → генерим картинку+видео и шлём альбомом
     elif 'garage_number' not in data:
-    data['garage_number'] = (message.text or "").strip()
+        data['garage_number'] = (message.text or "").strip()
 
-    transport_label = 'Автобус' if data['transport_type'] == 'bus' else 'Троллейбус'
-
-    img_path = None
-    video_path = None
-    ticket_path = None
-    try:
-        # 1) Генерим картинку + видео (anim.mp4 должен лежать рядом с кодом)
-        img_path, video_path = generate_ticket_video(
-            transport_label,
-            data['route_num'],
-            data['route'],
-            data['garage_number'],
-            base_video="anim.mp4",
-            crop_top_px=200
-        )
-
-        # 2) Отправляем альбом (фото + видео) — ВНУТРИ try!
-        with open(img_path, 'rb') as f_photo, open(video_path, 'rb') as f_video:
-            media = [
-                InputMediaPhoto(f_photo, caption="Ваш билет 🎟️"),
-                InputMediaVideo(f_video),
-            ]
-            print("STEP: sending media_group", flush=True)
-            safe_send(bot.send_media_group, message.chat.id, media)
-
-        safe_send(bot.send_message, message.chat.id, "✅ Билет сгенерирован! Введите любой символ для нового билета.")
-
-    except Exception as e:
-        # Фолбэк: если видео не получилось — отправим хотя бы фото
-        print("🔥 video gen/send failed:", repr(e), flush=True)
+        transport_label = 'Автобус' if data['transport_type'] == 'bus' else 'Троллейбус'
+        img_path = None
+        video_path = None
+        ticket_path = None
         try:
-            ticket_path = generate_ticket(
+            # 1) Генерим картинку + видео (anim.mp4 должен лежать рядом с кодом)
+            img_path, video_path = generate_ticket_video(
                 transport_label,
                 data['route_num'],
                 data['route'],
-                data['garage_number']
+                data['garage_number'],
+                base_video="anim.mp4",
+                crop_top_px=200
             )
-            with open(ticket_path, 'rb') as f:
-                safe_send(bot.send_photo, message.chat.id, f, caption="Ваш билет 🎟️ (видео временно недоступно)")
-        except Exception as e2:
-            print("🔥 fallback photo failed:", repr(e2), flush=True)
-            safe_send(bot.send_message, message.chat.id, f"Ошибка при генерации билета: {e2}")
 
-    finally:
-        # Чистим временные файлы (если были созданы)
-        for p in (img_path, video_path, ticket_path):
-            if p:
-                try:
-                    os.remove(p)
-                except Exception:
-                    pass
+            # 2) Отправляем альбом (фото + видео)
+            with open(img_path, 'rb') as f_photo, open(video_path, 'rb') as f_video:
+                media = [
+                    InputMediaPhoto(f_photo, caption="Ваш билет 🎟️"),
+                    InputMediaVideo(f_video),
+                ]
+                print("STEP: sending media_group", flush=True)
+                ok = safe_send(bot.send_media_group, message.chat.id, media)
 
+            if ok is None:
+                # если альбом упал — шлём по одному
+                with open(img_path, 'rb') as f1:
+                    safe_send(bot.send_photo, message.chat.id, f1, caption="Ваш билет 🎟️")
+                with open(video_path, 'rb') as f2:
+                    safe_send(bot.send_video, message.chat.id, f2, supports_streaming=True)
+
+            safe_send(bot.send_message, message.chat.id, "✅ Билет сгенерирован! Введите любой символ для нового билета.")
+
+        except Exception as e:
+            print("🔥 video gen/send failed:", repr(e), flush=True)
+            # фолбэк: отправим хотя бы фото
+            try:
+                ticket_path = generate_ticket(
+                    transport_label,
+                    data['route_num'],
+                    data['route'],
+                    data['garage_number']
+                )
+                with open(ticket_path, 'rb') as f:
+                    safe_send(bot.send_photo, message.chat.id, f, caption="Ваш билет 🎟️ (видео временно недоступно)")
+            except Exception as e2:
+                print("🔥 fallback photo failed:", repr(e2), flush=True)
+                safe_send(bot.send_message, message.chat.id, f"Ошибка при генерации билета: {e2}")
+
+        finally:
+            # очистка временных файлов
+            for p in (img_path, video_path, ticket_path):
+                if p:
+                    try:
+                        os.remove(p)
+                    except Exception:
+                        pass
+
+            user_data.pop(uid, None)
+
+    # 5) Защитный fallback
+    else:
+        safe_send(
+            bot.send_message,
+            message.chat.id,
+            "❗ Неожиданное сообщение. Вы можете:\n"
+            "🔄 Ввести любой символ, чтобы начать заново\n"
+            "📌 Или нажмите /start, чтобы снова выбрать тип транспорта"
+        )
         user_data.pop(uid, None)
+
 
 
 
@@ -470,4 +484,3 @@ if __name__ == "__main__":
     # при локальном запуске/polling-free — поднимем встроенный сервер Flask
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-
