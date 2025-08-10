@@ -324,59 +324,60 @@ def handle_message(message: Message):
             safe_send(bot.send_message, message.chat.id, "Некорректный ввод. Введите 1 или 2:")
 
     # 4) Гаражный номер → генерим КАРТИНКУ и отправляем
-        elif 'garage_number' not in data:
-            data['garage_number'] = (message.text or "").strip()
-        
-            transport_label = 'Автобус' if data['transport_type'] == 'bus' else 'Троллейбус'
-            img_path = None
-            video_path = None
-            try:
-                # 1) Пытаемся сделать и фото, и видео (если VIDEO_ENABLED и есть ffmpeg/anim.mp4)
-                if VIDEO_ENABLED:
-                    try:
-                        img_path, video_path = generate_ticket_video(
-                            transport_label,
-                            data['route_num'],
-                            data['route'],
-                            data['garage_number'],
-                            base_video=BASE_VIDEO,
-                            crop_top_px=CROP_TOP_PX,
-                        )
-                    except Exception as e_vid:
-                        print("⚠️ video overlay disabled or failed:", repr(e_vid), flush=True)
-                        img_path = None  # на всякий случай
-                        video_path = None
-        
-                # 2) Если видео не получилось — делаем обычное фото
-                if not img_path:
-                    img_path = generate_ticket(
+    
+     elif 'garage_number' not in data:
+        data['garage_number'] = (message.text or "").strip()
+
+        transport_label = 'Автобус' if data['transport_type'] == 'bus' else 'Троллейбус'
+        img_path = None
+        video_path = None
+        try:
+            # сначала пробуем фото+видео
+            if VIDEO_ENABLED:
+                try:
+                    img_path, video_path = generate_ticket_video(
                         transport_label,
                         data['route_num'],
                         data['route'],
-                        data['garage_number']
+                        data['garage_number'],
+                        base_video=BASE_VIDEO,
+                        crop_top_px=CROP_TOP_PX,
                     )
-        
-                # 3) Отправка: если есть и фото, и видео — альбом; иначе — только фото (документом, без сжатия)
-                if video_path:
-                    with open(img_path, 'rb') as f_photo, open(video_path, 'rb') as f_video:
-                        media = [
-                            InputMediaPhoto(f_photo, caption="Ваш билет 🎟️"),
-                            InputMediaVideo(f_video),
-                        ]
-                        safe_send(bot.send_media_group, message.chat.id, media)
-                else:
-                    with open(img_path, 'rb') as f:
-                        safe_send(bot.send_document, message.chat.id, f, caption="Ваш билет 🎟️")
-        
-                safe_send(bot.send_message, message.chat.id, "✅ Готово! Введите любой символ для нового билета.")
-            except Exception as e:
-                safe_send(bot.send_message, message.chat.id, f"Ошибка при генерации: {e}")
-            finally:
-                for p in (img_path, video_path):
-                    if p:
-                        try: os.remove(p)
-                        except: pass
-                user_data.pop(uid, None)
+                except Exception as e_vid:
+                    print("⚠️ video overlay disabled or failed:", repr(e_vid), flush=True)
+                    img_path = None
+                    video_path = None
+
+            # если видео не получилось — делаем только фото
+            if not img_path:
+                img_path = generate_ticket(
+                    transport_label,
+                    data['route_num'],
+                    data['route'],
+                    data['garage_number']
+                )
+
+            # отправка
+            if video_path:
+                with open(img_path, 'rb') as f_photo, open(video_path, 'rb') as f_video:
+                    media = [
+                        InputMediaPhoto(f_photo, caption="Ваш билет 🎟️"),
+                        InputMediaVideo(f_video),
+                    ]
+                    safe_send(bot.send_media_group, message.chat.id, media)
+            else:
+                with open(img_path, 'rb') as f:
+                    safe_send(bot.send_document, message.chat.id, f, caption="Ваш билет 🎟️")
+
+            safe_send(bot.send_message, message.chat.id, "✅ Готово! Введите любой символ для нового билета.")
+        except Exception as e:
+            safe_send(bot.send_message, message.chat.id, f"Ошибка при генерации: {e}")
+        finally:
+            for p in (img_path, video_path):
+                if p:
+                    try: os.remove(p)
+                    except: pass
+            user_data.pop(uid, None)
 
     # 5) Защитный fallback
     else:
@@ -433,6 +434,7 @@ if __name__ == "__main__":
     # при локальном запуске/polling-free — поднимем встроенный сервер Flask
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
