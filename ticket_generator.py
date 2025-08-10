@@ -50,4 +50,17 @@ def generate_ticket(transport, number, route, garage_number):
     draw.text((1077 - text_width, 1072), time_text, font=font_regular, fill="black")
 
     img.save("result.jpg", quality=95, optimize=True)
-    return "result.jpg"
+
+    from video_overlay import make_video_with_overlay
+
+    def generate_ticket_video(transport, number, route, garage_number, base_video="anim.mp4"):
+    img_path = generate_ticket(transport, number, route, garage_number)  # вернёт "result.jpg"
+    out_video = make_video_with_overlay(
+        base_video_path=base_video,
+        overlay_image_path=img_path,
+        output_path="result.mp4",
+        crop_top_px=200,        # можно менять
+        keep_ratio=False        # если исходный макет ровно равен размеру видео
+    )
+    return out_video
+
