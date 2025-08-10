@@ -6,6 +6,7 @@ print("DB_USER:", os.environ.get("DB_USER"))
 import os
 import sys
 import telebot
+from telebot.types import InputMediaPhoto, InputMediaVideo
 
 from routes import routes_bus, routes_trolleybus
 
@@ -553,6 +554,7 @@ if __name__ == "__main__":
     # при локальном запуске/polling-free — поднимем встроенный сервер Flask
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
