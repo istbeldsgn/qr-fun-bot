@@ -1,22 +1,30 @@
 # db_store.py
-import os, psycopg2
+import os
+import psycopg2
 
 def _conn():
+    # Сначала пробуем URL (если всё-таки захочешь оставить его)
+    url = os.environ.get("DATABASE_URL")
+    if url:
+        if "sslmode=" not in url:
+            url += ("&" if "?" in url else "?") + "sslmode=require"
+        return psycopg2.connect(url)
+
+    # Иначе — отдельные переменные (рекомендовано)
     host = os.environ["DB_HOST"]
     port = int(os.environ.get("DB_PORT", "5432"))
     name = os.environ["DB_NAME"]
     user = os.environ["DB_USER"]
     pwd  = os.environ["DB_PASSWORD"]
-    return psycopg2.connect(
-        host=host, port=port, dbname=name, user=user, password=pwd, sslmode="require"
-    )
 
-def _conn():
-    # гарантируем SSL, если вдруг его нет в строке
-    dsn = DATABASE_URL
-    if "sslmode=" not in dsn:
-        dsn += ("&" if "?" in dsn else "?") + "sslmode=require"
-    return psycopg2.connect(dsn)
+    return psycopg2.connect(
+        host=host,
+        port=port,
+        dbname=name,
+        user=user,
+        password=pwd,
+        sslmode="require",
+    )
 
 def init_db():
     sql = """
@@ -61,4 +69,3 @@ def add_or_update_user(user_id: int, role: str = "user"):
 def remove_user(user_id: int):
     with _conn() as conn, conn.cursor() as cur:
         cur.execute("delete from public.allowed_users where user_id = %s;", (user_id,))
-
