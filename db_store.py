@@ -3,13 +3,6 @@ import os
 import psycopg2
 
 def _conn():
-    # Сначала пробуем URL (если всё-таки захочешь оставить его)
-    url = os.environ.get("DATABASE_URL")
-    if url:
-        if "sslmode=" not in url:
-            url += ("&" if "?" in url else "?") + "sslmode=require"
-        return psycopg2.connect(url)
-
     # Иначе — отдельные переменные (рекомендовано)
     host = os.environ["DB_HOST"]
     port = int(os.environ.get("DB_PORT", "5432"))
@@ -69,3 +62,4 @@ def add_or_update_user(user_id: int, role: str = "user"):
 def remove_user(user_id: int):
     with _conn() as conn, conn.cursor() as cur:
         cur.execute("delete from public.allowed_users where user_id = %s;", (user_id,))
+
