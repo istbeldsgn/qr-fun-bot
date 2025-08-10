@@ -1,4 +1,11 @@
 import os
+print("DB_HOST:", os.environ.get("DB_HOST"))
+print("DB_PORT:", os.environ.get("DB_PORT"))
+print("DB_NAME:", os.environ.get("DB_NAME"))
+u = os.environ.get("DB_USER", "")
+print("DB_USER:", (u[:8] + "…" + u[-6:]) if u else None)
+
+import os
 import sys
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message, Update
@@ -474,6 +481,7 @@ if __name__ == "__main__":
     # при локальном запуске/polling-free — поднимем встроенный сервер Flask
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
