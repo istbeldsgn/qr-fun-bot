@@ -7,6 +7,9 @@ import os
 import sys
 import telebot
 
+from routes import routes_bus, routes_trolleybus
+
+
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message, Update
 from flask import Flask, request  # для вебхука (если дальше подключаешь)
 
@@ -550,6 +553,7 @@ if __name__ == "__main__":
     # при локальном запуске/polling-free — поднимем встроенный сервер Flask
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
