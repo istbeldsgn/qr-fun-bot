@@ -315,7 +315,7 @@ def handle_message(message: Message):
             bot.send_message(message.chat.id, "Введите гаражный номер:")
         else:
             bot.send_message(message.chat.id, "Некорректный ввод. Введите 1 или 2:")
-
+            
     elif 'garage_number' not in data:
     data['garage_number'] = (message.text or "").strip()
 
@@ -331,7 +331,7 @@ def handle_message(message: Message):
             data['route_num'],
             data['route'],
             data['garage_number'],
-            base_video="anim.mp4",   # файл-образец рядом с кодом, без папок
+            base_video="anim.mp4",   # файл-образец рядом с кодом
             crop_top_px=200
         )
 
@@ -339,7 +339,7 @@ def handle_message(message: Message):
         with open(img_path, 'rb') as f_photo, open(video_path, 'rb') as f_video:
             media = [
                 InputMediaPhoto(f_photo, caption="Ваш билет 🎟️"),
-                InputMediaVideo(f_video, caption="Если у вас Iphone, сохраните видео в галерею, и оно будет зацикленно"),
+                InputMediaVideo(f_video),
             ]
             bot.send_media_group(message.chat.id, media)
 
@@ -369,8 +369,7 @@ def handle_message(message: Message):
                     pass
 
         user_data.pop(uid, None)
-
-
+        
 #заменил polling , делаю вебхук 
 # --- Вебхук (Flask) ---
 from flask import Flask, request
@@ -417,6 +416,7 @@ if __name__ == "__main__":
     # при локальном запуске/polling-free — поднимем встроенный сервер Flask
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
