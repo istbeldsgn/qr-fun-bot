@@ -365,7 +365,7 @@ def add_guest(message: Message):
 @bot.message_handler(commands=['start'])
 def start(message: Message):
     uid = message.from_user.id
-    if uid not in allowed_users:
+    if not is_allowed(uid):
         bot.send_message(message.chat.id, "⛔ Доступ запрещён. Обратитесь к администратору.")
         return
 
@@ -374,12 +374,12 @@ def start(message: Message):
 
 
 # Обработка текста от разрешённых пользователей для диалога
-@bot.message_handler(func=lambda m: True)
+@bot.message_handler(func=lambda m: getattr(m, "text", None) and not m.text.startswith("/"))
 def handle_message(message: Message):
     uid = message.from_user.id
     print(f"💬 msg from {uid} allowed={is_allowed(uid)} text={message.text!r}", flush=True)
 
-    if uid not in allowed_users:
+    if not is_allowed(uid):
         bot.send_message(message.chat.id, "⛔ Доступ запрещён. Обратитесь к администратору.")
         return
 
@@ -389,54 +389,53 @@ def handle_message(message: Message):
     data = user_data[uid]
 
     if 'transport_type' not in data:
-        text = message.text.strip().lower()
-        if text == '1' or text == 'автобус':
+        text = (message.text or "").strip().lower()
+        if text in ('1', 'автобус'):
             data['transport_type'] = 'bus'
-            bot.send_message(chat_id, "Введите номер маршрута (например, 12):")
-        elif text == '2' or text == 'троллейбус':
+            bot.send_message(message.chat.id, "Введите номер маршрута (например, 12):")
+        elif text in ('2', 'троллейбус'):
             data['transport_type'] = 'trolleybus'
-            bot.send_message(chat_id, "Введите номер маршрута (например, 2):")
+            bot.send_message(message.chat.id, "Введите номер маршрута (например, 2):")
         else:
             bot.send_message(
-                chat_id,
+                message.chat.id,
                 "Введите тип транспорта:\n"
                 "1. Автобус\n"
                 "2. Троллейбус\n"
                 "(можно ввести цифру или слово)"
             )
 
-
     elif 'route_num' not in data:
-        data['route_num'] = message.text.strip()
+        data['route_num'] = (message.text or "").strip()
         route_num = data['route_num']
 
-        # Выбор нужной базы
         route_base = routes_bus if data['transport_type'] == 'bus' else routes_trolleybus
 
         if route_num in route_base:
             data['directions'] = route_base[route_num]
-            bot.send_message(chat_id, f"Выберите направление:\n1. {data['directions'][0]}\n2. {data['directions'][1]}")
+            bot.send_message(
+                message.chat.id,
+                f"Выберите направление:\n1. {data['directions'][0]}\n2. {data['directions'][1]}"
+            )
         else:
             data['route_manual'] = True
             data['route'] = route_num
-            bot.send_message(chat_id, "Маршрут не найден, введите гаражный номер:")
-
+            bot.send_message(message.chat.id, "Маршрут не найден, введите гаражный номер:")
 
     elif 'route' not in data and not data.get('route_manual', False):
-        choice = message.text.strip()
+        choice = (message.text or "").strip()
         if choice == '1':
             data['route'] = data['directions'][0]
-            bot.send_message(chat_id, "Введите гаражный номер:")
+            bot.send_message(message.chat.id, "Введите гаражный номер:")
         elif choice == '2':
             data['route'] = data['directions'][1]
-            bot.send_message(chat_id, "Введите гаражный номер:")
+            bot.send_message(message.chat.id, "Введите гаражный номер:")
         else:
-            bot.send_message(chat_id, "Некорректный ввод. Введите 1 или 2:")
+            bot.send_message(message.chat.id, "Некорректный ввод. Введите 1 или 2:")
 
     elif 'garage_number' not in data:
-        data['garage_number'] = message.text.strip()
+        data['garage_number'] = (message.text or "").strip()
 
-        # Собираем транспортное название для генерации
         transport_label = 'Автобус' if data['transport_type'] == 'bus' else 'Троллейбус'
         try:
             ticket_path = generate_ticket(
@@ -446,23 +445,23 @@ def handle_message(message: Message):
                 data['garage_number']
             )
             with open(ticket_path, 'rb') as file:
-                bot.send_document(chat_id, file)
+                bot.send_document(message.chat.id, file)
 
-            bot.send_message(chat_id, "✅ Билет сгенерирован! Введите любой символ для нового билета.")
+            bot.send_message(message.chat.id, "✅ Билет сгенерирован! Введите любой символ для нового билета.")
         except Exception as e:
-            bot.send_message(chat_id, f"Ошибка при генерации билета: {e}")
+            bot.send_message(message.chat.id, f"Ошибка при генерации билета: {e}")
 
-        # очистка
         user_data.pop(uid, None)
 
     else:
         bot.send_message(
-            chat_id,
+            message.chat.id,
             "❗ Неожиданное сообщение. Вы можете:\n"
             "🔄 Ввести любой символ, чтобы начать заново\n"
             "📌 Или нажмите /start, чтобы снова выбрать тип транспорта"
         )
-        user_data.pop(chat_id, None)
+        user_data.pop(uid, None)
+
 
 #заменил polling , делаю вебхук 
 # --- Вебхук (Flask) ---
