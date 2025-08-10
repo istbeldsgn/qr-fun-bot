@@ -5,5 +5,6 @@ pillow
 pytz
 python-dotenv
 gunicorn
+numpy>=1.24
 moviepy==1.0.3
 imageio-ffmpeg==0.4.9
