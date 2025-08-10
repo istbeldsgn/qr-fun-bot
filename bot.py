@@ -3,11 +3,6 @@ print("DB_HOST:", os.environ.get("DB_HOST"))
 print("DB_PORT:", os.environ.get("DB_PORT"))
 print("DB_NAME:", os.environ.get("DB_NAME"))
 print("DB_USER:", os.environ.get("DB_USER"))
-
-with _conn() as conn, conn.cursor() as cur:
-    cur.execute("select current_user, inet_server_addr();")
-    print("DB who/where:", cur.fetchone())
-
 import os
 import sys
 import telebot
@@ -23,6 +18,10 @@ except Exception as e:
     print(f"❌ DB FAIL: {e}")
     sys.exit(1)
 
+with _conn() as conn, conn.cursor() as cur:
+    cur.execute("select current_user, inet_server_addr();")
+    print("DB who/where:", cur.fetchone())
+    
 from db_store import init_db, ensure_admin, load_allowed_and_guest, add_or_update_user, remove_user
 from ticket_generator import generate_ticket  # ← твоя функция генерации
 
@@ -484,6 +483,7 @@ if __name__ == "__main__":
     # при локальном запуске/polling-free — поднимем встроенный сервер Flask
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
