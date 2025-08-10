@@ -7,6 +7,8 @@ import os
 import sys
 import telebot
 from telebot.types import InputMediaPhoto, InputMediaVideo
+from ticket_generator import generate_ticket_video, generate_ticket
+
 
 from routes import routes_bus, routes_trolleybus
 
@@ -248,7 +250,10 @@ def start(message: Message):
 
 
 # Обработка текста от разрешённых пользователей для диалога
-@bot.message_handler(func=lambda m: getattr(m, "text", None) and not m.text.startswith("/"))
+@bot.message_handler(func=lambda m: getattr(m, "chat", None)
+                                  and getattr(m.chat, "type", "") == "private"
+                                  and getattr(m, "text", None)
+                                  and not m.text.startswith("/"))
 def handle_message(message: Message):
     uid = message.from_user.id
     print(f"💬 msg from {uid} allowed={is_allowed(uid)} text={message.text!r}", flush=True)
@@ -256,21 +261,16 @@ def handle_message(message: Message):
     if not allow_message(uid):
         bot.send_message(message.chat.id, "Слишком много сообщений. Подождите пару секунд 🙏")
         return
-         
+        
     if not is_allowed(uid):
         bot.send_message(message.chat.id, "⛔ Доступ запрещён. Обратитесь к администратору.")
         return
-        
-    with with_user_lock(uid, timeout=5) as ok:
-        if not ok:
-            bot.send_message(message.chat.id, "Ещё обрабатываю предыдущее сообщение… подождите 1–2 сек.")
-            return
 
     if uid not in user_data:
         user_data[uid] = {}
-
     data = user_data[uid]
 
+    # 1) Выбор типа транспорта
     if 'transport_type' not in data:
         text = (message.text or "").strip().lower()
         if text in ('1', 'автобус'):
@@ -288,12 +288,12 @@ def handle_message(message: Message):
                 "(можно ввести цифру или слово)"
             )
 
+    # 2) Номер маршрута
     elif 'route_num' not in data:
-        data['route_num'] = (message.text or "").strip()
+        data['route_num'] = (message.text or "").strip().lower().replace('a', 'а')  # лат. a → кир. а
         route_num = data['route_num']
 
         route_base = routes_bus if data['transport_type'] == 'bus' else routes_trolleybus
-
         if route_num in route_base:
             data['directions'] = route_base[route_num]
             bot.send_message(
@@ -305,6 +305,7 @@ def handle_message(message: Message):
             data['route'] = route_num
             bot.send_message(message.chat.id, "Маршрут не найден, введите гаражный номер:")
 
+    # 3) Направление (если маршрут найден)
     elif 'route' not in data and not data.get('route_manual', False):
         choice = (message.text or "").strip()
         if choice == '1':
@@ -315,59 +316,69 @@ def handle_message(message: Message):
             bot.send_message(message.chat.id, "Введите гаражный номер:")
         else:
             bot.send_message(message.chat.id, "Некорректный ввод. Введите 1 или 2:")
-elif 'garage_number' not in data:
-    data['garage_number'] = (message.text or "").strip()
 
-    transport_label = 'Автобус' if data['transport_type'] == 'bus' else 'Троллейбус'
+    # 4) Гаражный номер → генерим картинку+видео и шлём альбомом
+    elif 'garage_number' not in data:
+        data['garage_number'] = (message.text or "").strip()
 
-    img_path = None
-    video_path = None
-    ticket_path = None
-    try:
-        # 1) Пытаемся сделать и картинку, и видео (анимация anim.mp4 лежит в корне проекта)
-        img_path, video_path = generate_ticket_video(
-            transport_label,
-            data['route_num'],
-            data['route'],
-            data['garage_number'],
-            base_video="anim.mp4",   # файл-образец рядом с кодом
-            crop_top_px=200
-        )
-
-        # 2) Отправляем альбом (фото + видео единым сообщением)
-        with open(img_path, 'rb') as f_photo, open(video_path, 'rb') as f_video:
-            media = [
-                InputMediaPhoto(f_photo, caption="Ваш билет 🎟️"),
-                InputMediaVideo(f_video),
-            ]
-            bot.send_media_group(message.chat.id, media)
-
-        bot.send_message(message.chat.id, "✅ Билет сгенерирован! Введите любой символ для нового билета.")
-
-    except Exception as e:
-        # Фолбэк: если видео не собралось — шлём хотя бы картинку
+        transport_label = 'Автобус' if data['transport_type'] == 'bus' else 'Троллейбус'
+        img_path = None
+        video_path = None
+        ticket_path = None
         try:
-            ticket_path = generate_ticket(
+            # пробуем сделать и картинку, и видео
+            img_path, video_path = generate_ticket_video(
                 transport_label,
                 data['route_num'],
                 data['route'],
-                data['garage_number']
+                data['garage_number'],
+                base_video="anim.mp4",   # файл-образец лежит в корне проекта
+                crop_top_px=200
             )
-            with open(ticket_path, 'rb') as f:
-                bot.send_photo(message.chat.id, f, caption="Ваш билет 🎟️ (без видео — временная ошибка)")
-        except Exception as e2:
-            bot.send_message(message.chat.id, f"Ошибка при генерации билета: {e2}")
 
-    finally:
-        # чистим временные файлы, если были созданы
-        for p in (img_path, video_path, ticket_path):
-            if p:
-                try:
-                    os.remove(p)
-                except Exception:
-                    pass
+            # отправляем альбом: фото + видео
+            with open(img_path, 'rb') as f_photo, open(video_path, 'rb') as f_video:
+                media = [
+                    InputMediaPhoto(f_photo, caption="Ваш билет 🎟️"),
+                    InputMediaVideo(f_video),
+                ]
+                bot.send_media_group(message.chat.id, media)
 
+            bot.send_message(message.chat.id, "✅ Билет сгенерирован! Введите любой символ для нового билета.")
+
+        except Exception as e:
+            # фолбэк: хотя бы картинку
+            try:
+                ticket_path = generate_ticket(
+                    transport_label,
+                    data['route_num'],
+                    data['route'],
+                    data['garage_number']
+                )
+                with open(ticket_path, 'rb') as f:
+                    bot.send_photo(message.chat.id, f, caption="Ваш билет 🎟️ (видео временно недоступно)")
+            except Exception as e2:
+                bot.send_message(message.chat.id, f"Ошибка при генерации билета: {e2}")
+
+        finally:
+            # очистка временных файлов
+            for p in (img_path, video_path, ticket_path):
+                if p:
+                    try: os.remove(p)
+                    except Exception: pass
+
+            user_data.pop(uid, None)
+
+    # 5) Защитный fallback
+    else:
+        bot.send_message(
+            message.chat.id,
+            "❗ Неожиданное сообщение. Вы можете:\n"
+            "🔄 Ввести любой символ, чтобы начать заново\n"
+            "📌 Или нажмите /start, чтобы снова выбрать тип транспорта"
+        )
         user_data.pop(uid, None)
+
 
         
 #заменил polling , делаю вебхук 
@@ -416,6 +427,7 @@ if __name__ == "__main__":
     # при локальном запуске/polling-free — поднимем встроенный сервер Flask
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
