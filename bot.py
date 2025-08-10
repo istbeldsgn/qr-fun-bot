@@ -47,6 +47,10 @@ def is_allowed(uid: int) -> bool:
         return False
 
 
+from collections import defaultdict, deque
+from threading import RLock
+import time
+
 last_msgs = defaultdict(deque)
 MAX_MSGS = 6          # не более 6 сообщений
 WINDOW  = 10          # за 10 секунд
@@ -60,14 +64,6 @@ def allow_message(uid: int) -> bool:
         return False
     q.append(now)
     return True
-
-
-
-
-
-from collections import defaultdict, deque
-from threading import RLock
-import time
 
 user_locks = defaultdict(RLock)
 
@@ -554,6 +550,7 @@ if __name__ == "__main__":
     # при локальном запуске/polling-free — поднимем встроенный сервер Flask
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
