@@ -47,6 +47,42 @@ def is_allowed(uid: int) -> bool:
         return False
 
 
+last_msgs = defaultdict(deque)
+MAX_MSGS = 6          # не более 6 сообщений
+WINDOW  = 10          # за 10 секунд
+
+def allow_message(uid: int) -> bool:
+    now = time.time()
+    q = last_msgs[uid]
+    while q and now - q[0] > WINDOW:
+        q.popleft()
+    if len(q) >= MAX_MSGS:
+        return False
+    q.append(now)
+    return True
+
+
+
+
+
+from collections import defaultdict, deque
+from threading import RLock
+import time
+
+user_locks = defaultdict(RLock)
+
+def with_user_lock(uid: int, timeout: float = 5.0):
+    lock = user_locks[uid]
+    class _Ctx:
+        def __enter__(self):
+            self.acquired = lock.acquire(timeout=timeout)
+            return self.acquired
+        def __exit__(self, exc_type, exc, tb):
+            if self.acquired:
+                lock.release()
+    return _Ctx()
+
+
 # --- Читаем переменные окружения с понятными ошибками ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID_RAW = os.environ.get("ADMIN_ID")
@@ -378,10 +414,19 @@ def start(message: Message):
 def handle_message(message: Message):
     uid = message.from_user.id
     print(f"💬 msg from {uid} allowed={is_allowed(uid)} text={message.text!r}", flush=True)
-
+    
+    if not allow_message(uid):
+        bot.send_message(message.chat.id, "Слишком много сообщений. Подождите пару секунд 🙏")
+        return
+         
     if not is_allowed(uid):
         bot.send_message(message.chat.id, "⛔ Доступ запрещён. Обратитесь к администратору.")
         return
+        
+    with with_user_lock(uid, timeout=5) as ok:
+        if not ok:
+            bot.send_message(message.chat.id, "Ещё обрабатываю предыдущее сообщение… подождите 1–2 сек.")
+            return
 
     if uid not in user_data:
         user_data[uid] = {}
@@ -509,6 +554,7 @@ if __name__ == "__main__":
     # при локальном запуске/polling-free — поднимем встроенный сервер Flask
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
