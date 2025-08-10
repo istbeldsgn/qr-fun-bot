@@ -265,6 +265,13 @@ def start(message: Message):
 
 
 # Обработка текста от разрешённых пользователей для диалога
+# ↑ Импорты выше файла должны включать:
+# from telebot.types import InputMediaPhoto, InputMediaVideo
+# и переменные окружения (где-то выше):
+# VIDEO_ENABLED = os.getenv("VIDEO_ENABLED", "1") == "1"
+# BASE_VIDEO    = os.getenv("BASE_VIDEO", "anim.mp4")
+# CROP_TOP_PX   = int(os.getenv("CROP_TOP_PX", "200"))
+
 @bot.message_handler(func=lambda m: getattr(m, "chat", None)
                                   and getattr(m.chat, "type", "") == "private"
                                   and getattr(m, "text", None)
@@ -272,9 +279,11 @@ def start(message: Message):
 def handle_message(message: Message):
     uid = message.from_user.id
     print(f"💬 msg from {uid} allowed={is_allowed(uid)} text={message.text!r}", flush=True)
+
     if not allow_message(uid):
-        bot.send_message(message.chat.id, "Слишком много сообщений. Подождите пару секунд 🙏")
+        safe_send(bot.send_message, message.chat.id, "Слишком много сообщений. Подождите пару секунд 🙏")
         return
+
     if not is_allowed(uid):
         safe_send(bot.send_message, message.chat.id, "⛔ Доступ запрещён. Обратитесь к администратору.")
         return
@@ -323,9 +332,8 @@ def handle_message(message: Message):
         else:
             safe_send(bot.send_message, message.chat.id, "Некорректный ввод. Введите 1 или 2:")
 
-    # 4) Гаражный номер → генерим КАРТИНКУ и отправляем
-    
-     elif 'garage_number' not in data:
+    # 4) Гаражный номер → генерим фото (и видео, если включено) и отправляем
+    elif 'garage_number' not in data:
         data['garage_number'] = (message.text or "").strip()
 
         transport_label = 'Автобус' if data['transport_type'] == 'bus' else 'Троллейбус'
@@ -387,7 +395,6 @@ def handle_message(message: Message):
                   "📌 Или нажмите /start, чтобы снова выбрать тип транспорта")
         user_data.pop(uid, None)
 
-  
 #заменил polling , делаю вебхук 
 # --- Вебхук (Flask) ---
 from flask import Flask, request
@@ -434,6 +441,7 @@ if __name__ == "__main__":
     # при локальном запуске/polling-free — поднимем встроенный сервер Flask
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
