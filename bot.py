@@ -315,8 +315,7 @@ def handle_message(message: Message):
             bot.send_message(message.chat.id, "Введите гаражный номер:")
         else:
             bot.send_message(message.chat.id, "Некорректный ввод. Введите 1 или 2:")
-            
-    elif 'garage_number' not in data:
+elif 'garage_number' not in data:
     data['garage_number'] = (message.text or "").strip()
 
     transport_label = 'Автобус' if data['transport_type'] == 'bus' else 'Троллейбус'
@@ -369,6 +368,7 @@ def handle_message(message: Message):
                     pass
 
         user_data.pop(uid, None)
+
         
 #заменил polling , делаю вебхук 
 # --- Вебхук (Flask) ---
@@ -416,6 +416,7 @@ if __name__ == "__main__":
     # при локальном запуске/polling-free — поднимем встроенный сервер Flask
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
