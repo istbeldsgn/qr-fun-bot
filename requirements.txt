@@ -1,4 +1,7 @@
-pytelegrambotapi
+pyTelegramBotAPI
+Flask
+psycopg2-binary
 pillow
 pytz
-
+python-dotenv
+gunicorn
