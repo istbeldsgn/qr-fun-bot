@@ -26,6 +26,23 @@ from db_store import init_db, ensure_admin, load_allowed_and_guest, add_or_updat
 from ticket_generator import generate_ticket  # ← твоя функция генерации
 
 
+def is_allowed(uid: int) -> bool:
+    # 1) Быстрая проверка по памяти
+    if uid in allowed_users:
+        return True
+    # 2) Фолбэк: смотрим в БД и если найден — добавляем в память
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute("select 1 from public.allowed_users where user_id = %s limit 1;", (uid,))
+            ok = cur.fetchone() is not None
+        if ok:
+            allowed_users.add(uid)
+        return ok
+    except Exception as e:
+        print(f"⚠️ DB check failed: {e}", flush=True)
+        return False
+
+
 # --- Читаем переменные окружения с понятными ошибками ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID_RAW = os.environ.get("ADMIN_ID")
@@ -483,6 +500,7 @@ if __name__ == "__main__":
     # при локальном запуске/polling-free — поднимем встроенный сервер Flask
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
