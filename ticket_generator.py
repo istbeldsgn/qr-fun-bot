@@ -1,5 +1,6 @@
 # ticket_generator.py
 import os
+import random
 import uuid
 import tempfile
 from datetime import datetime
@@ -33,26 +34,43 @@ def generate_ticket(transport: str, number: str, route: str, garage_number: str)
     img = Image.open(template_path).convert("RGB")
     draw = ImageDraw.Draw(img)
 
+    # --- Дата/время (Минск) ---
     minsk_time = datetime.now(pytz.timezone("Europe/Minsk"))
     date_text = minsk_time.strftime("%d.%m.%Y")
     time_text = minsk_time.strftime("%H:%M:%S")
 
+    # --- Заголовок "Автобус №12" по центру ---
     title = f"{transport} №{number}"
     tb = FONT_TRANSPORT.getbbox(title); tw = tb[2] - tb[0]
     draw.text((585 - tw / 2, 506), title, font=FONT_TRANSPORT, fill="black")
 
+    # --- Маршрут по центру ---
     rb = FONT_ROUTE.getbbox(route); rw = rb[2] - rb[0]
     draw.text((585 - rw / 2, 712), route, font=FONT_ROUTE, fill="black")
 
+    # --- Гаражный номер + подчёркивание (слева) ---
     gx, gy = 98, 950
     draw.text((gx, gy), garage_number, font=FONT_REGULAR, fill="black")
     gb = FONT_REGULAR.getbbox(garage_number); gw = gb[2] - gb[0]; gh = gb[3] - gb[1]
     draw.line((gx, gy + gh + 20, gx + gw, gy + gh + 20), fill="black", width=2)
 
+    # --- Дата (слева) ---
     draw.text((98, 1072), date_text, font=FONT_REGULAR, fill="black")
-    tb = FONT_REGULAR.getbbox(time_text); tw = tb[2] - tb[0]
-    draw.text((1077 - tw, 1072), time_text, font=FONT_REGULAR, fill="black")
 
+    # --- Время (справа, правый край = 1077) ---
+    tb_time = FONT_REGULAR.getbbox(time_text); tw_time = tb_time[2] - tb_time[0]
+    time_x_left = 1077 - tw_time
+    draw.text((time_x_left, 1072), time_text, font=FONT_REGULAR, fill="black")
+
+    # --- Номер билета (как у времени, но ВЫШЕ на 122px, левое выравнивание) ---
+    # Формат: ЭБ146775 + три случайные цифры
+    rand_suffix = f"{random.randint(0, 999):03d}"
+    ticket_no = f"ЭБ146775{rand_suffix}"
+    ticket_y = 1072 - 122  # на 122 пикселя выше строки времени
+    # левое выравнивание — рисуем прямо в точке time_x_left
+    draw.text((time_x_left, ticket_y), ticket_no, font=FONT_REGULAR, fill="black")
+
+    # --- Сохранение ---
     out_img = _tmp_path("jpg")
     img.save(out_img, format="JPEG", quality=95, optimize=True)
     return out_img
@@ -81,3 +99,4 @@ def generate_ticket_video(
         crop_top_px=crop_top_px,
     )
     return img_path, video_path
+
