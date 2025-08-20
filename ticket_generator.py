@@ -68,7 +68,7 @@ def generate_ticket(transport: str, number: str, route: str, garage_number: str)
     ticket_no = f"ЭБ146775{rand_suffix}"
     ticket_y = 1072 - 122  # на 122 пикселя выше строки времени
     # левое выравнивание — рисуем прямо в точке time_x_left
-    draw.text((time_x_left, ticket_y), ticket_no, font=FONT_REGULAR, fill="black")
+    draw.text((time_x_left - 125, ticket_y), ticket_no, font=FONT_REGULAR, fill="black")
 
     # --- Сохранение ---
     out_img = _tmp_path("jpg")
@@ -99,4 +99,5 @@ def generate_ticket_video(
         crop_top_px=crop_top_px,
     )
     return img_path, video_path
+
 
