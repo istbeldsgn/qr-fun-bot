@@ -1,6 +1,4 @@
-pytelegrambotapi
-pillow
-pytz
-psycopg2-binary
-flask
-gunicorn
+pyTelegramBotAPI==4.26.0
+Flask==3.0.3
+Pillow==10.4.0
+pytz==2024.1
