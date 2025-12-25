@@ -1,110 +1,89 @@
-# ticket_generator.py
 import os
 import random
 import uuid
 import tempfile
 from datetime import datetime
 
-from PIL import Image, ImageDraw, ImageFont
 import pytz
-from video_overlay import make_video_with_overlay, ffmpeg_ok  # ← добавили
+from PIL import Image, ImageDraw, ImageFont
 
-BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FONTS_DIR = os.path.join(BASE_DIR, "fonts")
+TEMPLATE_PATH = os.path.join(BASE_DIR, "template.jpg")
+
 
 def _tmp_path(ext: str) -> str:
-    return os.path.join(tempfile.gettempdir(), f"ticket_{uuid.uuid4().hex[:12]}.{ext.lstrip('.')}")
+    ext = ext.lstrip(".")
+    return os.path.join(tempfile.gettempdir(), f"ticket_{uuid.uuid4().hex[:12]}.{ext}")
 
-def _load_font(filename: str, size: int):
+
+def _load_font(filename: str, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     path = os.path.join(FONTS_DIR, filename)
     try:
         return ImageFont.truetype(path, size=size)
     except Exception:
+        # fallback, чтобы генерация не падала из-за шрифта
         return ImageFont.load_default()
 
+
 FONT_TRANSPORT = _load_font("TTNormsPro-Medium.ttf", 54)
-FONT_ROUTE     = _load_font("TTNormsPro-Medium.ttf", 41)
-FONT_REGULAR   = _load_font("TTNormsPro-Normal.ttf", 48)
+FONT_ROUTE = _load_font("TTNormsPro-Medium.ttf", 41)
+FONT_REGULAR = _load_font("TTNormsPro-Normal.ttf", 48)
+
 
 def generate_ticket(transport: str, number: str, route: str, garage_number: str) -> str:
-    template_path = os.path.join(BASE_DIR, "template.jpg")
-    if not os.path.exists(template_path):
-        raise FileNotFoundError(f"Не найден шаблон: {template_path}")
+    if not os.path.exists(TEMPLATE_PATH):
+        raise FileNotFoundError(f"Не найден шаблон: {TEMPLATE_PATH}")
 
-    img = Image.open(template_path).convert("RGB")
+    img = Image.open(TEMPLATE_PATH).convert("RGB")
     draw = ImageDraw.Draw(img)
 
-    # --- Дата/время (Минск) ---
+    # дата/время (Минск)
     minsk_time = datetime.now(pytz.timezone("Europe/Minsk"))
     date_text = minsk_time.strftime("%d.%m.%Y")
     time_text = minsk_time.strftime("%H:%M:%S")
 
-    # --- Заголовок "Автобус №12" по центру ---
+    # заголовок "Автобус №12" по центру
     title = f"{transport} №{number}"
-    tb = FONT_TRANSPORT.getbbox(title); tw = tb[2] - tb[0]
+    tb = FONT_TRANSPORT.getbbox(title)
+    tw = tb[2] - tb[0]
     draw.text((585 - tw / 2, 506), title, font=FONT_TRANSPORT, fill="black")
 
-    # --- Маршрут по центру ---
-    rb = FONT_ROUTE.getbbox(route); rw = rb[2] - rb[0]
+    # маршрут по центру
+    rb = FONT_ROUTE.getbbox(route)
+    rw = rb[2] - rb[0]
     draw.text((585 - rw / 2, 712), route, font=FONT_ROUTE, fill="black")
 
-    # --- Гаражный номер + подчёркивание (слева) ---
+    # гаражный номер + подчёркивание (слева)
     gx, gy = 98, 950
     draw.text((gx, gy), garage_number, font=FONT_REGULAR, fill="black")
-    gb = FONT_REGULAR.getbbox(garage_number); gw = gb[2] - gb[0]; gh = gb[3] - gb[1]
+    gb = FONT_REGULAR.getbbox(garage_number)
+    gw = gb[2] - gb[0]
+    gh = gb[3] - gb[1]
     draw.line((gx, gy + gh + 20, gx + gw, gy + gh + 20), fill="black", width=2)
 
-    # --- Дата (слева) ---
+    # дата (слева)
     draw.text((98, 1072), date_text, font=FONT_REGULAR, fill="black")
 
-    # --- Время (справа, правый край = 1077) ---
-    tb_time = FONT_REGULAR.getbbox(time_text); tw_time = tb_time[2] - tb_time[0]
+    # время (справа, правый край = 1077)
+    tb_time = FONT_REGULAR.getbbox(time_text)
+    tw_time = tb_time[2] - tb_time[0]
     time_x_left = 1077 - tw_time
     draw.text((time_x_left, 1072), time_text, font=FONT_REGULAR, fill="black")
 
-    # --- Номер билета (правый край совпадает с временем, выше на 122px) ---
-	rand_suffix = f"{random.randint(0, 999):03d}"
-	ticket_no = f"ЭБ146775{rand_suffix}"
-	ticket_y = 1072 - 122  # на 122 пикселя выше строки времени
+    # номер билета (правый край совпадает со временем, выше на 122px)
+    rand_suffix = f"{random.randint(0, 999):03d}"
+    ticket_no = f"ЭБ146775{rand_suffix}"
+    ticket_y = 1072 - 122
 
-	# считаем ширину текста
-	tb_ticket = FONT_REGULAR.getbbox(ticket_no)
-	tw_ticket = tb_ticket[2] - tb_ticket[0]
+    tb_ticket = FONT_REGULAR.getbbox(ticket_no)
+    tw_ticket = tb_ticket[2] - tb_ticket[0]
+    ticket_x_left = 1077 - tw_ticket
 
-	# правое выравнивание — тот же x, что и у времени (1077)
-	ticket_x_left = 1077 - tw_ticket
+    draw.text((ticket_x_left, ticket_y), ticket_no, font=FONT_REGULAR, fill="black")
 
-	draw.text((ticket_x_left, ticket_y), ticket_no, font=FONT_REGULAR, fill="black")
-
-    # --- Сохранение ---
+    # сохранение
     out_img = _tmp_path("jpg")
     img.save(out_img, format="JPEG", quality=95, optimize=True)
     return out_img
-
-def generate_ticket_video(
-    transport: str,
-    number: str,
-    route: str,
-    garage_number: str,
-    base_video: str = "anim.mp4",
-    crop_top_px: int = 200,
-):
-    """
-    Возвращает (img_path, video_path). Если ffmpeg/видео отсутствуют — кидает исключение.
-    """
-    img_path = generate_ticket(transport, number, route, garage_number)
-
-    if not ffmpeg_ok():
-        raise FileNotFoundError("ffmpeg отсутствует")
-
-    base_video_path = os.path.join(BASE_DIR, base_video)
-    video_path = make_video_with_overlay(
-        base_video_path=base_video_path,
-        overlay_image_path=img_path,
-        output_path=None,
-        crop_top_px=crop_top_px,
-    )
-    return img_path, video_path
-
-
-
