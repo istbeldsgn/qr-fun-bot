@@ -1,66 +1,41 @@
 import os
-print("DB_HOST:", os.environ.get("DB_HOST"))
-print("DB_PORT:", os.environ.get("DB_PORT"))
-print("DB_NAME:", os.environ.get("DB_NAME"))
-print("DB_USER:", os.environ.get("DB_USER"))
-import os
 import sys
+import time
+from collections import defaultdict, deque
+from threading import RLock
+
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message, Update
+from telebot.types import Message, Update
 from flask import Flask, request
 
-from telebot.types import InputMediaPhoto, InputMediaVideo  # <— для альбома
-from ticket_generator import generate_ticket, generate_ticket_video  # <— добавили generate_ticket_video
-
+from routes import routes_bus, routes_trolleybus
 from ticket_generator import generate_ticket
 
 
-from routes import routes_bus, routes_trolleybus
+# ----------------- ENV -----------------
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 
-import logging
-telebot.logger.setLevel(logging.INFO)
-
-from db_store import _conn
-try:
-    with _conn() as conn, conn.cursor() as cur:
-        cur.execute("select 1;")
-    print("✅ DB OK: подключение установлено")
-except Exception as e:
-    print(f"❌ DB FAIL: {e}")
-    sys.exit(1)
-
-with _conn() as conn, conn.cursor() as cur:
-    cur.execute("select current_user, inet_server_addr();")
-    print("DB who/where:", cur.fetchone())
-    
-from db_store import init_db, ensure_admin, load_allowed_and_guest, add_or_update_user, remove_user
-from ticket_generator import generate_ticket  # ← твоя функция генерации
+missing = []
+if not BOT_TOKEN:
+    missing.append("BOT_TOKEN")
+if not WEBHOOK_URL:
+    missing.append("WEBHOOK_URL")
+if missing:
+    sys.exit(f"❌ Не заданы переменные окружения: {', '.join(missing)}")
 
 
-def is_allowed(uid: int) -> bool:
-    # 1) Быстрая проверка по памяти
-    if uid in allowed_users:
-        return True
-    # 2) Фолбэк: смотрим в БД и если найден — добавляем в память
-    try:
-        with _conn() as conn, conn.cursor() as cur:
-            cur.execute("select 1 from public.allowed_users where user_id = %s limit 1;", (uid,))
-            ok = cur.fetchone() is not None
-        if ok:
-            allowed_users.add(uid)
-        return ok
-    except Exception as e:
-        print(f"⚠️ DB check failed: {e}", flush=True)
-        return False
+# ----------------- Bot -----------------
+bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
+
+# ----------------- State (FSM) -----------------
+user_data = {}  # user_id -> dict
 
 
-from collections import defaultdict, deque
-from threading import RLock
-import time
-
+# ----------------- Anti-flood -----------------
 last_msgs = defaultdict(deque)
-MAX_MSGS = 6          # не более 6 сообщений
-WINDOW  = 10          # за 10 секунд
+MAX_MSGS = 6
+WINDOW = 10
 
 def allow_message(uid: int) -> bool:
     now = time.time()
@@ -72,17 +47,22 @@ def allow_message(uid: int) -> bool:
     q.append(now)
     return True
 
+
+# ----------------- Locks per user -----------------
 user_locks = defaultdict(RLock)
 
 def with_user_lock(uid: int, timeout: float = 5.0):
     lock = user_locks[uid]
+
     class _Ctx:
         def __enter__(self):
             self.acquired = lock.acquire(timeout=timeout)
             return self.acquired
+
         def __exit__(self, exc_type, exc, tb):
             if self.acquired:
                 lock.release()
+
     return _Ctx()
 
 
@@ -91,320 +71,179 @@ def safe_send(fn, *args, **kwargs):
         return fn(*args, **kwargs)
     except Exception as e:
         print("🔥 send error:", repr(e), flush=True)
+        return None
 
 
-
-# --- Читаем переменные окружения с понятными ошибками ---
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-ADMIN_ID_RAW = os.environ.get("ADMIN_ID")
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # пригодится далее для вебхука
-
-
-VIDEO_ENABLED = os.getenv("VIDEO_ENABLED", "1") == "1"   # легко выключить
-BASE_VIDEO    = os.getenv("BASE_VIDEO", "anim.mp4")
-CROP_TOP_PX   = int(os.getenv("CROP_TOP_PX", "200"))
+def compact_user(user) -> str:
+    username = f"@{user.username}" if getattr(user, "username", None) else "-"
+    first = (getattr(user, "first_name", "") or "").strip()
+    last = (getattr(user, "last_name", "") or "").strip()
+    full = (first + " " + last).strip() or "-"
+    uid = getattr(user, "id", "-")
+    return f"{username} | {full} | id={uid}"
 
 
-missing = []
-if not BOT_TOKEN:
-    missing.append("BOT_TOKEN")
-if not ADMIN_ID_RAW:
-    missing.append("ADMIN_ID")
-# если прямо сейчас делаешь вебхук, то WEBHOOK_URL обязателен:
-if not WEBHOOK_URL:
-    missing.append("WEBHOOK_URL")
-
-if missing:
-    sys.exit(f"❌ Не заданы переменные окружения: {', '.join(missing)}")
-
-try:
-    ADMIN_ID = int(ADMIN_ID_RAW)
-except ValueError:
-    sys.exit("❌ ADMIN_ID должен быть целым числом")
-
-# --- Инициализируем БД и подгружаем списки из БД ---
-init_db()
-ensure_admin(ADMIN_ID)  # гарантируем, что админ есть в таблице
-allowed_users, guest_users = load_allowed_and_guest()
-allowed_users.add(ADMIN_ID)  # на всякий случай держим админа в памяти
-
-# --- Создаём бота ---
-bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
-
-# --- Память для состояний диалога (ключ — user_id, а не chat_id) ---
-user_data = {}
-
-
-
-from html import escape
-
-def notify_admin_about_access_request(user):
-    user_id = user.id
-    username = escape(user.username) if user.username else "нет username"
-    first_name = escape(user.first_name) if user.first_name else ""
-    last_name = escape(user.last_name) if user.last_name else ""
-    full_name = f"{first_name} {last_name}".strip()
-
-    text = (
-        f"👤 Пользователь пытается получить доступ к боту:\n"
-        f"Имя: {full_name}\n"
-        f"Username: @{username}\n"
-        f"ID: {user_id}\n"
-        f'<a href="tg://user?id={user_id}">Профиль</a>\n\n'
-        "Предоставить доступ?"
+def log_ticket_generated(user, payload: dict):
+    # короткая строка для Render
+    print(
+        "🎟️ ticket_generated "
+        f"user={compact_user(user)} "
+        f"transport={payload.get('transport_label')} "
+        f"route_num={payload.get('route_num')} "
+        f"route={payload.get('route')} "
+        f"garage={payload.get('garage_number')}",
+        flush=True
     )
 
-    keyboard = InlineKeyboardMarkup(row_width=2)
-    allow_button = InlineKeyboardButton(text="✅ Разрешить", callback_data=f"allow_{user_id}")
-    deny_button = InlineKeyboardButton(text="❌ Отклонить", callback_data=f"deny_{user_id}")
-    keyboard.add(allow_button, deny_button)
 
-    bot.send_message(ADMIN_ID, text, reply_markup=keyboard, parse_mode="HTML")
-
-
-# Обработчик сообщений от НЕ разрешённых пользователей (только личные чаты)
-@bot.message_handler(func=lambda m: getattr(m.chat, "type", "") == "private" and not is_allowed(m.from_user.id))
-def handle_unauthorized(message):
-    user = message.from_user
-    bot.send_message(message.chat.id, "⛔ Доступ запрещён. Ожидайте подтверждения от администратора.")
-    notify_admin_about_access_request(user)
-     
-# Блокируем группы, чтобы бот работал только в личке
-@bot.message_handler(func=lambda m: getattr(m.chat, "type", "") != "private")
-def block_groups(message: Message):
-    bot.reply_to(message, "Бот работает только в личных сообщениях. Напишите мне в личку.")
-     
-@bot.callback_query_handler(func=lambda call: call.data.startswith(("allow_", "deny_")))
-def callback_access_control(call: CallbackQuery):
-    user_id = int(call.data.split("_")[1])
-
-    if call.from_user.id != ADMIN_ID:
-        bot.answer_callback_query(call.id, "У вас нет прав для этого действия.")
-        return
-
-    if call.data.startswith("allow_"):
-        if user_id not in allowed_users:
-            allowed_users.add(user_id)
-        # если используешь БД (Supabase)
-        try:
-            add_or_update_user(user_id, role="guest")  # или "user"
-        except Exception:
-            pass
-
-        bot.answer_callback_query(call.id, "Доступ предоставлен")
-        bot.edit_message_text(
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            text=f"✅ Доступ для пользователя [id={user_id}](tg://user?id={user_id}) предоставлен.",
-            parse_mode="Markdown"
-        )
-        try:
-            bot.send_message(user_id, "✅ Вам предоставлен доступ к боту. Можете пользоваться.")
-        except Exception:
-            pass
-
-    else:  # deny_
-        if user_id in allowed_users:
-            allowed_users.discard(user_id)
-        try:
-            remove_user(user_id)
-        except Exception:
-            pass
-
-        bot.answer_callback_query(call.id, "Доступ отклонён")
-        bot.edit_message_text(
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            text=f"❌ Доступ для пользователя [id={user_id}](tg://user?id={user_id}) отклонён.",
-            parse_mode="Markdown"
-        )
-        try:
-            bot.send_message(user_id, "❌ К сожалению, доступ к боту вам не предоставлен.")
-        except Exception:
-            pass
-
-
-@bot.message_handler(commands=['add_guest'])
-def add_guest(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        bot.send_message(message.chat.id, "⛔ У вас нет прав для выполнения этой команды.")
-        return
-
-    if not message.reply_to_message:
-        bot.send_message(message.chat.id, "❗ Перешлите сообщение пользователя и ответьте на него командой /add_guest.")
-        return
-
-    fwd = message.reply_to_message.forward_from
-    guest_id = fwd.id if fwd else None
-    if not guest_id:
-        bot.send_message(message.chat.id, "⚠️ Не удалось получить ID пользователя. Убедитесь, что он не скрывает пересылку сообщений.")
-        return
-
-    allowed_users.add(guest_id)
-    guest_users.add(guest_id)
-    try:
-        add_or_update_user(guest_id, role="guest")
-    except Exception:
-        pass
-
-    bot.send_message(message.chat.id, f"✅ Пользователь с ID {guest_id} добавлен как гость.")
-
-
-
-
-# Команда /start для разрешённых пользователей — выбор типа транспорта
+# ----------------- Commands -----------------
 @bot.message_handler(commands=['start'])
 def start(message: Message):
     uid = message.from_user.id
-    if not is_allowed(uid):
-        safe_send(bot.send_message, message.chat.id, "⛔ Доступ запрещён. Обратитесь к администратору.")
-        return
-
-    bot.send_message(message.chat.id, "Выберите тип транспорта:\n1. Автобус\n2. Троллейбус")
     user_data[uid] = {}
+    safe_send(bot.send_message, message.chat.id, "Выберите тип транспорта:\n1. Автобус\n2. Троллейбус")
 
 
-# Обработка текста от разрешённых пользователей для диалога
-# ↑ Импорты выше файла должны включать:
-# from telebot.types import InputMediaPhoto, InputMediaVideo
-# и переменные окружения (где-то выше):
-# VIDEO_ENABLED = os.getenv("VIDEO_ENABLED", "1") == "1"
-# BASE_VIDEO    = os.getenv("BASE_VIDEO", "anim.mp4")
-# CROP_TOP_PX   = int(os.getenv("CROP_TOP_PX", "200"))
+# Блокируем группы — бот работает только в личке
+@bot.message_handler(func=lambda m: getattr(m.chat, "type", "") != "private")
+def block_groups(message: Message):
+    safe_send(bot.reply_to, message, "Бот работает только в личных сообщениях. Напишите мне в личку.")
 
-@bot.message_handler(func=lambda m: getattr(m, "chat", None)
-                                  and getattr(m.chat, "type", "") == "private"
-                                  and getattr(m, "text", None)
-                                  and not m.text.startswith("/"))
+
+# ----------------- Main dialog handler -----------------
+@bot.message_handler(
+    func=lambda m: getattr(m, "chat", None)
+    and getattr(m.chat, "type", "") == "private"
+    and getattr(m, "text", None)
+    and not m.text.startswith("/")
+)
 def handle_message(message: Message):
     uid = message.from_user.id
-    print(f"💬 msg from {uid} allowed={is_allowed(uid)} text={message.text!r}", flush=True)
 
     if not allow_message(uid):
         safe_send(bot.send_message, message.chat.id, "Слишком много сообщений. Подождите пару секунд 🙏")
-        return
-
-    if not is_allowed(uid):
-        safe_send(bot.send_message, message.chat.id, "⛔ Доступ запрещён. Обратитесь к администратору.")
         return
 
     if uid not in user_data:
         user_data[uid] = {}
     data = user_data[uid]
 
-    # 1) Выбор типа транспорта
-    if 'transport_type' not in data:
-        text = (message.text or "").strip().lower()
-        if text in ('1', 'автобус'):
-            data['transport_type'] = 'bus'
-            safe_send(bot.send_message, message.chat.id, "Введите номер маршрута (например, 12):")
-        elif text in ('2', 'троллейбус'):
-            data['transport_type'] = 'trolleybus'
-            safe_send(bot.send_message, message.chat.id, "Введите номер маршрута (например, 2):")
-        else:
-            safe_send(bot.send_message, message.chat.id,
-                      "Введите тип транспорта:\n1. Автобус\n2. Троллейбус\n(можно ввести цифру или слово)")
+    with with_user_lock(uid) as acquired:
+        if not acquired:
+            safe_send(bot.send_message, message.chat.id, "Подождите секунду и повторите 🙏")
+            return
 
-    # 2) Номер маршрута
-    elif 'route_num' not in data:
-        data['route_num'] = (message.text or "").strip().lower().replace('a', 'а')
-        route_num = data['route_num']
-
-        route_base = routes_bus if data['transport_type'] == 'bus' else routes_trolleybus
-        if route_num in route_base:
-            data['directions'] = route_base[route_num]
-            safe_send(bot.send_message, message.chat.id,
-                      f"Выберите направление:\n1. {data['directions'][0]}\n2. {data['directions'][1]}")
-        else:
-            data['route_manual'] = True
-            data['route'] = route_num
-            safe_send(bot.send_message, message.chat.id, "Маршрут не найден, введите гаражный номер:")
-
-    # 3) Направление (если маршрут найден)
-    elif 'route' not in data and not data.get('route_manual', False):
-        choice = (message.text or "").strip()
-        if choice == '1':
-            data['route'] = data['directions'][0]
-            safe_send(bot.send_message, message.chat.id, "Введите гаражный номер:")
-        elif choice == '2':
-            data['route'] = data['directions'][1]
-            safe_send(bot.send_message, message.chat.id, "Введите гаражный номер:")
-        else:
-            safe_send(bot.send_message, message.chat.id, "Некорректный ввод. Введите 1 или 2:")
-
-    # 4) Гаражный номер → генерим фото (и видео, если включено) и отправляем
-    elif 'garage_number' not in data:
-        data['garage_number'] = (message.text or "").strip()
-
-        transport_label = 'Автобус' if data['transport_type'] == 'bus' else 'Троллейбус'
-        img_path = None
-        video_path = None
         try:
-            # сначала пробуем фото+видео
-            if VIDEO_ENABLED:
+            # 1) Выбор типа транспорта
+            if 'transport_type' not in data:
+                text = (message.text or "").strip().lower()
+                if text in ('1', 'автобус'):
+                    data['transport_type'] = 'bus'
+                    safe_send(bot.send_message, message.chat.id, "Введите номер маршрута (например, 12):")
+                elif text in ('2', 'троллейбус'):
+                    data['transport_type'] = 'trolleybus'
+                    safe_send(bot.send_message, message.chat.id, "Введите номер маршрута (например, 2):")
+                else:
+                    safe_send(
+                        bot.send_message,
+                        message.chat.id,
+                        "Введите тип транспорта:\n1. Автобус\n2. Троллейбус\n(можно ввести цифру или слово)"
+                    )
+                return
+
+            # 2) Номер маршрута
+            if 'route_num' not in data:
+                data['route_num'] = (message.text or "").strip().lower().replace('a', 'а')
+                route_num = data['route_num']
+
+                route_base = routes_bus if data['transport_type'] == 'bus' else routes_trolleybus
+                if route_num in route_base:
+                    data['directions'] = route_base[route_num]
+                    safe_send(
+                        bot.send_message,
+                        message.chat.id,
+                        f"Выберите направление:\n1. {data['directions'][0]}\n2. {data['directions'][1]}"
+                    )
+                else:
+                    data['route_manual'] = True
+                    data['route'] = route_num
+                    safe_send(bot.send_message, message.chat.id, "Маршрут не найден, введите гаражный номер:")
+                return
+
+            # 3) Направление (если маршрут найден)
+            if 'route' not in data and not data.get('route_manual', False):
+                choice = (message.text or "").strip()
+                if choice == '1':
+                    data['route'] = data['directions'][0]
+                    safe_send(bot.send_message, message.chat.id, "Введите гаражный номер:")
+                elif choice == '2':
+                    data['route'] = data['directions'][1]
+                    safe_send(bot.send_message, message.chat.id, "Введите гаражный номер:")
+                else:
+                    safe_send(bot.send_message, message.chat.id, "Некорректный ввод. Введите 1 или 2:")
+                return
+
+            # 4) Гаражный номер → генерим фото и отправляем
+            if 'garage_number' not in data:
+                data['garage_number'] = (message.text or "").strip()
+
+                transport_label = 'Автобус' if data['transport_type'] == 'bus' else 'Троллейбус'
+                img_path = None
+
+                payload = {
+                    "transport_label": transport_label,
+                    "route_num": data.get("route_num"),
+                    "route": data.get("route"),
+                    "garage_number": data.get("garage_number"),
+                }
+
                 try:
-                    img_path, video_path = generate_ticket_video(
+                    img_path = generate_ticket(
                         transport_label,
                         data['route_num'],
                         data['route'],
-                        data['garage_number'],
-                        base_video=BASE_VIDEO,
-                        crop_top_px=CROP_TOP_PX,
+                        data['garage_number']
                     )
-                except Exception as e_vid:
-                    print("⚠️ video overlay disabled or failed:", repr(e_vid), flush=True)
-                    img_path = None
-                    video_path = None
 
-            # если видео не получилось — делаем только фото
-            if not img_path:
-                img_path = generate_ticket(
-                    transport_label,
-                    data['route_num'],
-                    data['route'],
-                    data['garage_number']
-                )
+                    # отправляем фото как документ (стабильнее, чем photo)
+                    with open(img_path, 'rb') as f:
+                        safe_send(bot.send_document, message.chat.id, f, caption="Ваш билет 🎟️")
 
-            # отправка
-            if video_path:
-                with open(img_path, 'rb') as f_photo, open(video_path, 'rb') as f_video:
-                    media = [
-                        InputMediaPhoto(f_photo, caption="Ваш билет 🎟️"),
-                        InputMediaVideo(f_video),
-                    ]
-                    safe_send(bot.send_media_group, message.chat.id, media)
-            else:
-                with open(img_path, 'rb') as f:
-                    safe_send(bot.send_document, message.chat.id, f, caption="Ваш билет 🎟️")
+                    # лог в Render — только после успешной выдачи
+                    log_ticket_generated(message.from_user, payload)
 
-            safe_send(bot.send_message, message.chat.id, "✅ Готово! Введите любой символ для нового билета.")
-        except Exception as e:
-            safe_send(bot.send_message, message.chat.id, f"Ошибка при генерации: {e}")
-        finally:
-            for p in (img_path, video_path):
-                if p:
-                    try: os.remove(p)
-                    except: pass
+                    safe_send(bot.send_message, message.chat.id, "✅ Готово! Введите любой символ для нового билета.")
+                except Exception as e:
+                    safe_send(bot.send_message, message.chat.id, f"Ошибка при генерации: {e}")
+                    print("🔥 ticket generation error:", repr(e), flush=True)
+                finally:
+                    if img_path:
+                        try:
+                            os.remove(img_path)
+                        except Exception:
+                            pass
+                    user_data.pop(uid, None)
+                return
+
+            # 5) fallback
+            safe_send(
+                bot.send_message,
+                message.chat.id,
+                "❗ Неожиданное сообщение. Вы можете:\n"
+                "🔄 Ввести любой символ, чтобы начать заново\n"
+                "📌 Или нажмите /start, чтобы снова выбрать тип транспорта"
+            )
             user_data.pop(uid, None)
 
-    # 5) Защитный fallback
-    else:
-        safe_send(bot.send_message, message.chat.id,
-                  "❗ Неожиданное сообщение. Вы можете:\n"
-                  "🔄 Ввести любой символ, чтобы начать заново\n"
-                  "📌 Или нажмите /start, чтобы снова выбрать тип транспорта")
-        user_data.pop(uid, None)
-
-#заменил polling , делаю вебхук 
-# --- Вебхук (Flask) ---
-from flask import Flask, request
-from telebot.types import Update
-
+        except Exception as e:
+            print("🔥 handler fatal error:", repr(e), flush=True)
+            safe_send(bot.send_message, message.chat.id, "Произошла ошибка. Нажмите /start и попробуйте снова.")
+            user_data.pop(uid, None)
+# ----------------- Webhook (Flask) -----------------
 app = Flask(__name__)
 
 @app.route("/", methods=["GET"])
 def index():
-    # чтобы Render не видел 404 на корне
     return "ok", 200
 
 @app.route("/healthz", methods=["GET"])
@@ -414,7 +253,6 @@ def health():
 @app.route("/webhook", methods=["POST"])
 def webhook():
     raw = request.get_data().decode("utf-8")
-    print("⬇️ update:", raw, flush=True)   # видно любой апдейт
     try:
         upd = Update.de_json(raw)
         bot.process_new_updates([upd])
@@ -422,27 +260,18 @@ def webhook():
         print("🔥 webhook handler error:", repr(e), flush=True)
     return "OK", 200
 
+
 def configure_webhook():
-    # ставим вебхук и при gunicorn, и при python
+    # важно для Render: выставляем вебхук при старте контейнера
     bot.remove_webhook()
-    bot.set_webhook(url=WEBHOOK_URL, allowed_updates=["message", "callback_query"])
-    # необязательно, но полезно: проверка, что токен рабочий
+    bot.set_webhook(url=WEBHOOK_URL, allowed_updates=["message"])
     try:
         me = bot.get_me()
-        print(f"✅ Telegram OK: @{me.username} (id {me.id})")
+        print(f"✅ Telegram OK: @{me.username} (id {me.id})", flush=True)
+        print(f"✅ Webhook set: {WEBHOOK_URL}", flush=True)
     except Exception as e:
-        print(f"❌ Telegram auth failed: {e}")
+        print(f"❌ Telegram auth failed: {e}", flush=True)
         sys.exit(1)
 
-# вызываем сразу при импорте модуля (важно для gunicorn)
-configure_webhook()
 
-if __name__ == "__main__":
-    # при локальном запуске/polling-free — поднимем встроенный сервер Flask
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
-
-
-
-
-
+# вызываем при импорте — работает
